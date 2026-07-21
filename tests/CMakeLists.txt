@@ -30,6 +30,7 @@ add_executable(rvemu_tests
   memory_test.cpp
   memory_instructions_test.cpp
   register_instructions_test.cpp
+  system_instructions_test.cpp
 )
 target_link_libraries(
   rvemu_tests

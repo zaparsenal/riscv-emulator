@@ -13,10 +13,12 @@ enum class TrapCause : std::uint32_t {
   InstructionAddressMisaligned = 0U,
   InstructionAccessFault = 1U,
   IllegalInstruction = 2U,
+  Breakpoint = 3U,
   LoadAddressMisaligned = 4U,
   LoadAccessFault = 5U,
   StoreAddressMisaligned = 6U,
   StoreAccessFault = 7U,
+  EnvironmentCallFromUserMode = 8U,
 };
 
 struct Trap {

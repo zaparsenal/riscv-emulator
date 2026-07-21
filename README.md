@@ -7,11 +7,12 @@ reproducible benchmarks, and differential validation against established
 emulators.
 
 The project is being built in small, tested milestones. It now has a working
-fetch-decode-execute pipeline with intentionally limited instruction support.
+fetch-decode-execute pipeline with complete base RV32I instruction support.
 
 ## Current status
 
-The foundational state, memory, and execution-loop milestones are complete:
+The foundational state, memory, execution-loop, and RV32I milestones are
+complete:
 
 - 32 unsigned 32-bit integer registers
 - an enforced `x0 == 0` invariant
@@ -27,7 +28,7 @@ The foundational state, memory, and execution-loop milestones are complete:
 - aligned 32-bit instruction fetch
 - typed step and bounded-run results using architectural instruction trap causes
 - execution of RV32I upper-immediate, integer-immediate, register-register ALU,
-  jump, conditional-branch, load, and store groups
+  jump, conditional-branch, load, store, memory-ordering, and environment groups
 - host-independent signed comparisons and arithmetic right shifts
 - five-bit masking of register-provided shift counts
 - strict rejection of reserved ALU encodings without state changes
@@ -35,6 +36,9 @@ The foundational state, memory, and execution-loop milestones are complete:
 - modulo-2^32 effective-address calculation for data accesses
 - architectural load/store misalignment and access-fault traps with precise
   register, memory, and PC effects
+- conservative `FENCE` execution for the single-hart, strongly ordered memory
+  model, including forward-compatible handling of reserved fence fields
+- precise, non-retiring `ECALL` and `EBREAK` traps
 - bounded execution of loops through the existing instruction-limit API
 - GoogleTest coverage for state, memory, instruction formats, fetch, execution,
   signed boundaries, shift limits, operand aliasing, PC-relative wraparound,
@@ -44,9 +48,9 @@ The foundational state, memory, and execution-loop milestones are complete:
 - optional AddressSanitizer and UndefinedBehaviorSanitizer instrumentation
 - GitHub Actions validation with GCC and Clang
 
-RV32I is not complete, and RV32M has not started. There is currently no
-command-line executable, ELF loader, system-call layer, debugger, performance
-model, or published benchmark result.
+RV32I is complete, and RV32M has not started. There is currently no command-line
+executable, ELF loader, system-call layer, debugger, performance model, or
+published benchmark result.
 
 ## Supported instructions
 
@@ -59,15 +63,17 @@ model, or published benchmark result.
 | Conditional branches | `BEQ`, `BNE`, `BLT`, `BGE`, `BLTU`, `BGEU` |
 | Loads | `LB`, `LH`, `LW`, `LBU`, `LHU` |
 | Stores | `SB`, `SH`, `SW` |
+| Memory ordering | `FENCE` |
+| Environment | `ECALL`, `EBREAK` |
 
 Instruction behavior follows the
 [RV32I Base Integer Instruction Set, version 2.1](https://docs.riscv.org/reference/isa/v20260120/unpriv/rv32.html).
 Where the specification leaves reserved encodings unspecified, this emulator
 chooses a deterministic `IllegalInstruction` trap.
 
-All other instructions currently return an `IllegalInstruction` trap. This is a
-temporary implementation boundary, not a claim that architecturally valid
-instructions are illegal in RV32I.
+Instructions outside the support table currently return an `IllegalInstruction`
+trap. They belong to unsupported extensions, privileged execution, or reserved
+encoding space rather than the base RV32I target.
 
 ## Architecture
 
@@ -100,6 +106,19 @@ architectural traps: a failed load leaves its destination unchanged, a failed
 store cannot partially alter memory, and either failure leaves the PC at the
 faulting instruction. Even a load targeting `x0` still performs the access and
 can trap.
+
+`FENCE` retires as a conservative ordering operation. Because the current
+memory model is single-hart, synchronous, and has no devices or deferred memory
+operations, it requires no additional runtime action. All `FENCE` field
+configurations are accepted as required for base-ISA forward compatibility;
+`FENCE.I` remains unsupported because it belongs to the separate `Zifencei`
+extension.
+
+`ECALL` and `EBREAK` are exact-encoding, precise traps: they do not advance the
+PC, mutate registers, or count as retired instructions. Until privilege modes
+are modeled, `ECALL` is reported as `EnvironmentCallFromUserMode`; the later
+system-call environment will consume that trap rather than changing instruction
+semantics.
 
 Signed comparisons use sign-bit-biased unsigned ordering, and arithmetic right
 shift explicitly constructs the sign-fill bits. This keeps RV32I behavior
@@ -178,10 +197,9 @@ Callers can inspect `StepResult` as either `StepCompleted` or `Trap`. A bounded
    memory, tests, sanitizers, and CI.
 2. **Complete:** instruction representation, all base instruction formats,
    aligned fetch, typed traps, and bounded step/run execution.
-3. **In progress:** implement and exhaustively test RV32I in focused instruction
-   families; upper-immediate, integer-immediate, and register-register ALU
-   operations, control flow, loads, and stores are complete.
-4. Implement and exhaustively test the RV32M extension.
+3. **Complete:** all base RV32I instruction families, including precise traps
+   and deterministic handling of reserved encodings.
+4. **Next:** implement and exhaustively test the RV32M extension.
 5. Load validated 32-bit little-endian RISC-V ELF files.
 6. Add a minimal system-call environment for output and termination.
 7. Add an interactive debugger with stepping, breakpoints, and state inspection.
@@ -193,12 +211,16 @@ Callers can inspect `StepResult` as either `StepCompleted` or `Trap`. A bounded
 
 - Memory is one contiguous mapped region, not yet a sparse address map or bus.
 - Misaligned halfword and word accesses always fail; no emulation mode exists.
-- Only the instructions in the support table execute. Other recognized opcodes
-  currently produce an `IllegalInstruction` trap until implemented.
+- RV32M is not implemented; its encodings currently produce an
+  `IllegalInstruction` trap.
+- `Zicsr`, `Zifencei`, privileged instructions, and other extensions are not
+  implemented. Their encodings produce an `IllegalInstruction` trap.
 - Decoding currently validates the major opcode and reconstructs its format;
   instruction-specific function-field validation occurs in the execution layer.
 - Memory APIs use typed C++ exceptions. Instruction-fetch and data-access
   failures are translated into architectural trap results by `ExecutionEngine`.
 - There is no CSR or architectural trap-handler state yet; traps are returned to
   the host caller.
+- There is no privilege-mode state. `ECALL` is currently classified as a
+  user-mode environment call for the future user-level syscall layer.
 - There are no performance claims or results yet.

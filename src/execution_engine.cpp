@@ -7,6 +7,9 @@
 namespace rvemu {
 namespace {
 
+constexpr std::uint32_t kEcallInstruction = 0x00000073U;
+constexpr std::uint32_t kEbreakInstruction = 0x00100073U;
+
 [[nodiscard]] constexpr bool signed_less_than(const std::uint32_t left,
                                                const std::uint32_t right)
     noexcept {
@@ -332,6 +335,19 @@ StepResult ExecutionEngine::step() {
       instruction_supported = true;
       break;
     }
+    case Opcode::MiscMemory:
+      if (instruction->function3 == 0U) {  // FENCE
+        instruction_supported = true;
+      }
+      break;
+    case Opcode::System:
+      if (raw == kEcallInstruction) {
+        return instruction_trap(TrapCause::EnvironmentCallFromUserMode, 0U);
+      }
+      if (raw == kEbreakInstruction) {
+        return instruction_trap(TrapCause::Breakpoint, 0U);
+      }
+      break;
     default:
       break;
   }

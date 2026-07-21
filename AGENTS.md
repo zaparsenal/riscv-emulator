@@ -13,8 +13,8 @@ Correctness takes priority over optimization.
 
 ## Current state
 
-Milestones 1 and 2 plus the first four RV32I instruction slices are complete.
-The repository has:
+Milestones 1 through 3 are complete, including the full base RV32I instruction
+set. The repository has:
 
 - C++20/CMake project scaffolding
 - a reusable `rvemu::core` library
@@ -32,7 +32,8 @@ The repository has:
 - tested execution of `LUI`, `AUIPC`, `ADDI`, `SLTI`, `SLTIU`, `XORI`, `ORI`,
   `ANDI`, `SLLI`, `SRLI`, `SRAI`, `ADD`, `SUB`, `SLL`, `SLT`, `SLTU`, `XOR`,
   `SRL`, `SRA`, `OR`, `AND`, `JAL`, `JALR`, `BEQ`, `BNE`, `BLT`, `BGE`,
-  `BLTU`, `BGEU`, `LB`, `LH`, `LW`, `LBU`, `LHU`, `SB`, `SH`, and `SW`
+  `BLTU`, `BGEU`, `LB`, `LH`, `LW`, `LBU`, `LHU`, `SB`, `SH`, `SW`, `FENCE`,
+  `ECALL`, and `EBREAK`
 - modulo-2^32 arithmetic, PC-relative wraparound, host-independent signed
   comparison and arithmetic shift, effective-address wraparound, and enforced
   `x0`
@@ -41,14 +42,16 @@ The repository has:
 - precise, atomic control-flow target validation and link-register updates
 - architectural data-access traps with precise destination, memory, and PC
   behavior
+- conservative single-hart `FENCE` execution and precise, non-retiring
+  breakpoint and user-environment-call traps
 - GoogleTest unit tests
 - optional AddressSanitizer and UndefinedBehaviorSanitizer support
 - GCC and Clang GitHub Actions CI
 - a pinned GoogleTest source dependency by default, avoiding host-package ABI
   mismatches; `RVEMU_USE_SYSTEM_GTEST=ON` is an explicit opt-in
 
-RV32I remains incomplete. There is no executable, ELF loader, syscall layer,
-debugger, performance model, or benchmark suite yet.
+RV32I is complete. RV32M is not implemented. There is no executable, ELF loader,
+syscall layer, debugger, performance model, or benchmark suite yet.
 
 ## Architecture and directory structure
 
@@ -129,6 +132,20 @@ The CMake library target is `rvemu_core`, with the namespaced alias
 - Validate reserved load/store `funct3` fields before attempting memory access.
   Their deterministic `IllegalInstruction` trap carries the raw instruction,
   not an effective address.
+- In the current synchronous single-hart memory model, `FENCE` has no additional
+  runtime action beyond retiring normally. Accept every `MISC-MEM` encoding with
+  `funct3 == 0`, including nonzero `rd`/`rs1` and reserved `fm` or set fields:
+  the base specification requires conservative forward-compatible treatment.
+- `FENCE.I` has `funct3 == 1` and belongs to `Zifencei`; it remains an illegal
+  instruction until that extension is intentionally added.
+- Recognize only the exact `ECALL` (`0x00000073`) and `EBREAK` (`0x00100073`)
+  encodings in the base `SYSTEM` opcode. Other `SYSTEM` encodings include
+  privileged or `Zicsr` instructions and remain illegal.
+- `ECALL` and `EBREAK` are precise requested traps: do not advance the PC,
+  mutate registers, or count the instruction as retired. Their trap value is
+  zero. With no privilege-mode state yet, classify `ECALL` as
+  `EnvironmentCallFromUserMode`; the future user-level syscall layer will
+  interpret that trap.
 - JALR only accepts `funct3 == 0`. Branch `funct3` values 2 and 3 are reserved;
   this emulator deterministically returns `IllegalInstruction` without mutation.
 - `StepResult` and `RunResult` are variants, preventing invalid success/trap
@@ -214,18 +231,20 @@ Completed:
 - Milestone 3d: RV32I loads and stores with sign/zero extension, truncation,
   little-endian access, effective-address wraparound, aliasing, and precise data
   traps.
+- Milestone 3e: RV32I `FENCE`, `ECALL`, and `EBREAK` with forward-compatible
+  fence handling, exact system encodings, and precise non-retiring traps. Base
+  RV32I is complete.
 
 Next milestone:
 
-- Complete the remaining base RV32I environment and memory-ordering slice with
-  `FENCE`, `ECALL`, and `EBREAK`.
-- Model `FENCE` consistently with the current single-hart, strongly ordered
-  memory implementation, and return architectural environment-call/breakpoint
-  traps without adding the later host syscall layer yet.
-- Test legal and reserved encodings, precise trap state, bounded-run retirement
-  counts, and the documented single-hart ordering semantics.
+- Implement all eight RV32M operations: `MUL`, `MULH`, `MULHSU`, `MULHU`,
+  `DIV`, `DIVU`, `REM`, and `REMU`.
+- Use explicit-width unsigned arithmetic and bit-level signed handling so host
+  overflow and signed-shift behavior cannot affect architectural results.
+- Test high-word multiplication, signed boundaries, division by zero, the
+  `INT32_MIN / -1` overflow case, register aliasing, writes to `x0`, and strict
+  `funct7 == 0x01` decoding.
 - Update both documentation files, validate, commit, and push.
 
-After final RV32I validation: RV32M, ELF loading, syscalls, interactive
-debugging, cache/branch models, reproducible benchmarks, and differential
-testing.
+After RV32M: ELF loading, syscalls, interactive debugging, cache/branch models,
+reproducible benchmarks, and differential testing.

@@ -26,14 +26,17 @@ The foundational state, memory, and execution-loop milestones are complete:
 - recognition of the RV32I major opcodes
 - aligned 32-bit instruction fetch
 - typed step and bounded-run results using architectural instruction trap causes
-- execution of the RV32I upper-immediate, integer-immediate, and
-  register-register ALU groups
+- execution of RV32I upper-immediate, integer-immediate, register-register ALU,
+  jump, and conditional-branch groups
 - host-independent signed comparisons and arithmetic right shifts
 - five-bit masking of register-provided shift counts
 - strict rejection of reserved ALU encodings without state changes
+- precise control-flow traps with atomic PC/link-register effects
+- bounded execution of loops through the existing instruction-limit API
 - GoogleTest coverage for state, memory, instruction formats, fetch, execution,
   signed boundaries, shift limits, operand aliasing, PC-relative wraparound,
-  instruction limits, illegal instructions, and access faults
+  taken and untaken branches, misaligned targets, instruction limits, illegal
+  instructions, and access faults
 - optional AddressSanitizer and UndefinedBehaviorSanitizer instrumentation
 - GitHub Actions validation with GCC and Clang
 
@@ -48,6 +51,8 @@ model, or published benchmark result.
 | Upper immediate | `LUI`, `AUIPC` |
 | Integer immediate | `ADDI`, `SLTI`, `SLTIU`, `XORI`, `ORI`, `ANDI`, `SLLI`, `SRLI`, `SRAI` |
 | Register-register ALU | `ADD`, `SUB`, `SLL`, `SLT`, `SLTU`, `XOR`, `SRL`, `SRA`, `OR`, `AND` |
+| Jumps | `JAL`, `JALR` |
+| Conditional branches | `BEQ`, `BNE`, `BLT`, `BGE`, `BLTU`, `BGEU` |
 
 Instruction behavior follows the
 [RV32I Base Integer Instruction Set, version 2.1](https://docs.riscv.org/reference/isa/v20260120/unpriv/rv32.html).
@@ -76,6 +81,11 @@ The implementation currently builds one reusable library, `rvemu::core`:
   decodes, and executes one instruction. `run(limit)` executes until its strict
   instruction limit or the first trap. Both APIs return variants, so successful
   execution cannot be confused with a trap.
+
+Execution computes pending effects before committing them. A misaligned taken
+jump or branch therefore traps at the control-transfer instruction without
+changing its link register or PC. Untaken branches advance normally without
+validating an unused target.
 
 Signed comparisons use sign-bit-biased unsigned ordering, and arithmetic right
 shift explicitly constructs the sign-fill bits. This keeps RV32I behavior
@@ -156,7 +166,7 @@ Callers can inspect `StepResult` as either `StepCompleted` or `Trap`. A bounded
    aligned fetch, typed traps, and bounded step/run execution.
 3. **In progress:** implement and exhaustively test RV32I in focused instruction
    families; upper-immediate, integer-immediate, and register-register ALU
-   operations are complete.
+   operations plus control flow are complete.
 4. Implement and exhaustively test the RV32M extension.
 5. Load validated 32-bit little-endian RISC-V ELF files.
 6. Add a minimal system-call environment for output and termination.

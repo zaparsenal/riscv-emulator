@@ -13,7 +13,7 @@ Correctness takes priority over optimization.
 
 ## Current state
 
-Milestones 1 and 2 plus the first two RV32I instruction slices are complete.
+Milestones 1 and 2 plus the first three RV32I instruction slices are complete.
 The repository has:
 
 - C++20/CMake project scaffolding
@@ -31,11 +31,13 @@ The repository has:
   first-trap termination
 - tested execution of `LUI`, `AUIPC`, `ADDI`, `SLTI`, `SLTIU`, `XORI`, `ORI`,
   `ANDI`, `SLLI`, `SRLI`, `SRAI`, `ADD`, `SUB`, `SLL`, `SLT`, `SLTU`, `XOR`,
-  `SRL`, `SRA`, `OR`, and `AND`
+  `SRL`, `SRA`, `OR`, `AND`, `JAL`, `JALR`, `BEQ`, `BNE`, `BLT`, `BGE`,
+  `BLTU`, and `BGEU`
 - modulo-2^32 arithmetic, PC-relative wraparound, host-independent signed
   comparison and arithmetic shift, and enforced `x0`
 - five-bit masking of register-provided shift counts
 - strict reserved ALU-encoding validation before architectural mutation
+- precise, atomic control-flow target validation and link-register updates
 - GoogleTest unit tests
 - optional AddressSanitizer and UndefinedBehaviorSanitizer support
 - GCC and Clang GitHub Actions CI
@@ -104,6 +106,16 @@ The CMake library target is `rvemu_core`, with the namespaced alias
   this ordering so destination/source aliasing remains architecturally correct.
 - `funct7 == 0x01` register operations are RV32M encodings. They intentionally
   trap until the M extension milestone and must not be mislabeled as RV32I.
+- JAL and taken branches add their sign-extended immediate to the address of the
+  current instruction using modulo-2^32 arithmetic. JALR adds its immediate to
+  the original `rs1` value, then clears target bit zero.
+- Under `IALIGN=32`, taken jump/branch targets must be four-byte aligned. Check
+  alignment before writing a link register or PC. Untaken branches must not
+  validate or trap on their unused target.
+- Control-flow execution uses pending effects: optional destination value plus
+  next PC. Preserve this commit-after-validation structure for precise traps.
+- JALR only accepts `funct3 == 0`. Branch `funct3` values 2 and 3 are reserved;
+  this emulator deterministically returns `IllegalInstruction` without mutation.
 - `StepResult` and `RunResult` are variants, preventing invalid success/trap
   combinations. A trapping instruction is not counted as retired and leaves the
   PC at its address.
@@ -181,19 +193,21 @@ Completed:
   signed-boundary, shift, PC-relative, reserved-encoding, and `x0` tests.
 - Milestone 3b: RV32I register-register ALU instructions with exact `funct7`
   validation, five-bit shift masking, overflow, aliasing, and `x0` tests.
+- Milestone 3c: RV32I jumps and conditional branches with precise target
+  alignment traps, signed/unsigned decisions, aliasing, wraparound, backward
+  targets, and bounded-loop tests.
 
 Next milestone:
 
-- Implement RV32I control flow: `JAL`, `JALR`, `BEQ`, `BNE`, `BLT`, `BGE`,
-  `BLTU`, and `BGEU`.
-- Calculate targets with modulo-2^32 arithmetic and enforce `IALIGN=32` at the
-  control-transfer instruction before link-register or PC mutation.
-- Test taken and not-taken branches, signed/unsigned boundaries, backward and
-  wraparound targets, JALR bit-zero clearing, link aliasing, and misaligned
-  targets without side effects.
+- Implement RV32I loads `LB`, `LH`, `LW`, `LBU`, `LHU` and stores `SB`, `SH`,
+  `SW` with modulo-2^32 effective addresses.
+- Add architectural load/store misalignment and access-fault trap causes, and
+  translate typed memory errors without partial register or memory mutation.
+- Test sign/zero extension, offset boundaries, address wraparound, alignment,
+  bounds failures, source/destination aliasing, and faulting loads to `x0`.
 - Update both documentation files, validate, commit, and push.
 
-Later RV32I slices should cover control flow, memory, fence/system behavior, and
-then complete RV32I validation. After that: RV32M, ELF loading, syscalls,
-interactive debugging, cache/branch models, reproducible benchmarks, and
-differential testing.
+Later RV32I slices should cover memory, fence/system behavior, and then complete
+RV32I validation. After that: RV32M, ELF loading, syscalls, interactive
+debugging, cache/branch models, reproducible benchmarks, and differential
+testing.

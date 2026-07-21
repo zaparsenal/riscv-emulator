@@ -119,6 +119,32 @@ namespace {
   }
 }
 
+[[nodiscard]] std::optional<bool> evaluate_branch(
+    const DecodedInstruction& instruction, const std::uint32_t source1,
+    const std::uint32_t source2) noexcept {
+  switch (instruction.function3) {
+    case 0x0U:  // BEQ
+      return source1 == source2;
+    case 0x1U:  // BNE
+      return source1 != source2;
+    case 0x4U:  // BLT
+      return signed_less_than(source1, source2);
+    case 0x5U:  // BGE
+      return !signed_less_than(source1, source2);
+    case 0x6U:  // BLTU
+      return source1 < source2;
+    case 0x7U:  // BGEU
+      return source1 >= source2;
+    default:
+      return std::nullopt;
+  }
+}
+
+[[nodiscard]] constexpr bool is_instruction_aligned(
+    const std::uint32_t address) noexcept {
+  return (address & 0x3U) == 0U;
+}
+
 }  // namespace
 
 ExecutionEngine::ExecutionEngine(CpuState& state, Memory& memory) noexcept
@@ -144,34 +170,84 @@ StepResult ExecutionEngine::step() {
     return instruction_trap(TrapCause::IllegalInstruction, raw);
   }
 
+  const std::uint32_t sequential_program_counter = program_counter + 4U;
+  std::uint32_t next_program_counter = sequential_program_counter;
   std::optional<std::uint32_t> destination_value;
+  bool instruction_supported = false;
+
   switch (instruction->opcode) {
     case Opcode::Lui:
       destination_value = instruction->immediate;
+      instruction_supported = true;
       break;
     case Opcode::Auipc:
       destination_value = program_counter + instruction->immediate;
+      instruction_supported = true;
       break;
     case Opcode::OpImmediate:
       destination_value = execute_op_immediate(
           *instruction, state_.read_register(instruction->source1));
+      instruction_supported = destination_value.has_value();
       break;
     case Opcode::Op:
       destination_value = execute_op(
           *instruction, state_.read_register(instruction->source1),
           state_.read_register(instruction->source2));
+      instruction_supported = destination_value.has_value();
       break;
+    case Opcode::Jal:
+      next_program_counter = program_counter + instruction->immediate;
+      if (!is_instruction_aligned(next_program_counter)) {
+        return instruction_trap(TrapCause::InstructionAddressMisaligned,
+                                next_program_counter);
+      }
+      destination_value = sequential_program_counter;
+      instruction_supported = true;
+      break;
+    case Opcode::Jalr:
+      if (instruction->function3 != 0U) {
+        break;
+      }
+      next_program_counter =
+          (state_.read_register(instruction->source1) +
+           instruction->immediate) &
+          ~std::uint32_t{1U};
+      if (!is_instruction_aligned(next_program_counter)) {
+        return instruction_trap(TrapCause::InstructionAddressMisaligned,
+                                next_program_counter);
+      }
+      destination_value = sequential_program_counter;
+      instruction_supported = true;
+      break;
+    case Opcode::Branch: {
+      const auto branch_taken = evaluate_branch(
+          *instruction, state_.read_register(instruction->source1),
+          state_.read_register(instruction->source2));
+      if (!branch_taken.has_value()) {
+        break;
+      }
+      if (*branch_taken) {
+        next_program_counter = program_counter + instruction->immediate;
+        if (!is_instruction_aligned(next_program_counter)) {
+          return instruction_trap(TrapCause::InstructionAddressMisaligned,
+                                  next_program_counter);
+        }
+      }
+      instruction_supported = true;
+      break;
+    }
     default:
       break;
   }
 
-  if (!destination_value.has_value()) {
+  if (!instruction_supported) {
     return instruction_trap(TrapCause::IllegalInstruction, raw);
   }
 
-  state_.write_register(instruction->destination, *destination_value);
+  if (destination_value.has_value()) {
+    state_.write_register(instruction->destination, *destination_value);
+  }
 
-  const std::uint32_t next_program_counter = program_counter + 4U;
   state_.set_program_counter(next_program_counter);
   return StepCompleted{*instruction, program_counter, next_program_counter};
 }

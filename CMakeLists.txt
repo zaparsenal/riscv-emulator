@@ -12,6 +12,8 @@ include(cmake/ProjectOptions.cmake)
 
 add_library(rvemu_core
   src/cpu_state.cpp
+  src/execution_engine.cpp
+  src/instruction.cpp
   src/memory.cpp
 )
 add_library(rvemu::core ALIAS rvemu_core)

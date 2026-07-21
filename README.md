@@ -6,12 +6,12 @@ RV32IM execution of real ELF programs, with debugging, cache and branch models,
 reproducible benchmarks, and differential validation against established
 emulators.
 
-The project is being built in small, tested milestones. It does **not** execute
-instructions yet.
+The project is being built in small, tested milestones. It now has a working
+fetch-decode-execute pipeline with intentionally limited instruction support.
 
 ## Current status
 
-The foundational state and memory milestone is complete:
+The foundational state, memory, and execution-loop milestones are complete:
 
 - 32 unsigned 32-bit integer registers
 - an enforced `x0 == 0` invariant
@@ -19,16 +19,23 @@ The foundational state and memory milestone is complete:
 - reset support for CPU state
 - contiguous, zero-initialized memory at a configurable 32-bit base address
 - bounds-checked byte, halfword, and word accesses
-- explicit traps (C++ exceptions) for out-of-bounds and misaligned accesses
+- typed memory errors for out-of-bounds and misaligned accesses
 - little-endian reads and writes
-- GoogleTest coverage for state, endian behavior, address-space boundaries,
-  alignment, failed writes, and reset behavior
+- decoding for the R, I, S, B, U, and J instruction layouts, including explicit
+  sign extension of encoded immediates
+- recognition of the RV32I major opcodes
+- aligned 32-bit instruction fetch
+- typed step and bounded-run results using architectural instruction trap causes
+- execution of `ADDI`, including modulo-2^32 arithmetic and `x0` behavior
+- GoogleTest coverage for state, memory, instruction formats, fetch, execution,
+  PC updates, instruction limits, illegal instructions, and access faults
 - optional AddressSanitizer and UndefinedBehaviorSanitizer instrumentation
 - GitHub Actions validation with GCC and Clang
 
-No RV32I or RV32M instructions are supported yet. There is currently no command
-line executable, ELF loader, system-call layer, debugger, performance model, or
-published benchmark result.
+`ADDI` is the only executable instruction. RV32I is therefore not complete, and
+RV32M has not started. There is currently no command-line executable, ELF
+loader, system-call layer, debugger, performance model, or published benchmark
+result.
 
 ## Architecture
 
@@ -41,10 +48,16 @@ The implementation currently builds one reusable library, `rvemu::core`:
   Multi-byte operations are explicitly little-endian. Halfword and word
   operations require natural alignment; invalid accesses throw typed errors
   before modifying memory.
+- `decode_instruction` recognizes RV32I major opcodes and produces normalized
+  register, function, format, and immediate fields. Immediate reconstruction is
+  host-independent and avoids signed-overflow assumptions.
+- `ExecutionEngine` references a `CpuState` and `Memory`. `step()` fetches,
+  decodes, and executes one instruction. `run(limit)` executes until its strict
+  instruction limit or the first trap. Both APIs return variants, so successful
+  execution cannot be confused with a trap.
 
-Keeping CPU state and memory independent will let the execution engine, ELF
-loader, debugger, and performance models share clear interfaces in later
-milestones.
+Keeping CPU state, memory, decoding, and execution independently testable gives
+later ELF loading, debugging, and performance models clear integration points.
 
 ## Repository layout
 
@@ -92,21 +105,30 @@ The public headers can be used from another CMake target after linking
 
 ```cpp
 #include <rvemu/cpu_state.hpp>
+#include <rvemu/execution_engine.hpp>
 #include <rvemu/memory.hpp>
 
 rvemu::CpuState cpu;
-cpu.write_register(1, 42);
-cpu.advance_program_counter();
-
 rvemu::Memory memory(0x80000000U, 64U * 1024U);
-memory.write32(0x80000000U, 0x12345678U);
+cpu.set_program_counter(0x80000000U);
+
+// addi x1, x0, 42
+memory.write32(0x80000000U, 0x02A00093U);
+
+rvemu::ExecutionEngine engine(cpu, memory);
+const rvemu::StepResult result = engine.step();
 ```
+
+Callers can inspect `StepResult` as either `StepCompleted` or `Trap`. A bounded
+`run(instruction_limit)` call returns either `InstructionLimitReached` or
+`RunTrapped` and reports the number of successfully retired instructions.
 
 ## Roadmap
 
 1. **Complete:** C++20/CMake scaffolding, CPU state, checked little-endian
    memory, tests, sanitizers, and CI.
-2. Add instruction representation, decoding, and the fetch-decode-execute loop.
+2. **Complete:** instruction representation, all base instruction formats,
+   aligned fetch, typed traps, and bounded step/run execution.
 3. Implement and exhaustively test RV32I.
 4. Implement and exhaustively test the RV32M extension.
 5. Load validated 32-bit little-endian RISC-V ELF files.
@@ -120,8 +142,12 @@ memory.write32(0x80000000U, 0x12345678U);
 
 - Memory is one contiguous mapped region, not yet a sparse address map or bus.
 - Misaligned halfword and word accesses always fail; no emulation mode exists.
-- Errors currently use C++ exceptions. The execution engine will translate
-  relevant failures into architectural traps when trap handling is introduced.
-- The program counter permits any value; instruction alignment belongs to the
-  future fetch/execution layer.
+- Only `ADDI` executes. Other recognized opcodes currently produce an
+  `IllegalInstruction` trap until their semantics are implemented.
+- Decoding currently validates the major opcode and reconstructs its format;
+  instruction-specific function-field validation occurs in the execution layer.
+- Memory APIs use typed C++ exceptions. Instruction-fetch failures are translated
+  into architectural trap results by `ExecutionEngine`.
+- There is no CSR or architectural trap-handler state yet; traps are returned to
+  the host caller.
 - There are no performance claims or results yet.

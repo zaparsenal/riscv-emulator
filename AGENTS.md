@@ -13,7 +13,7 @@ Correctness takes priority over optimization.
 
 ## Current state
 
-Milestones 1 and 2 plus the first three RV32I instruction slices are complete.
+Milestones 1 and 2 plus the first four RV32I instruction slices are complete.
 The repository has:
 
 - C++20/CMake project scaffolding
@@ -32,12 +32,15 @@ The repository has:
 - tested execution of `LUI`, `AUIPC`, `ADDI`, `SLTI`, `SLTIU`, `XORI`, `ORI`,
   `ANDI`, `SLLI`, `SRLI`, `SRAI`, `ADD`, `SUB`, `SLL`, `SLT`, `SLTU`, `XOR`,
   `SRL`, `SRA`, `OR`, `AND`, `JAL`, `JALR`, `BEQ`, `BNE`, `BLT`, `BGE`,
-  `BLTU`, and `BGEU`
+  `BLTU`, `BGEU`, `LB`, `LH`, `LW`, `LBU`, `LHU`, `SB`, `SH`, and `SW`
 - modulo-2^32 arithmetic, PC-relative wraparound, host-independent signed
-  comparison and arithmetic shift, and enforced `x0`
+  comparison and arithmetic shift, effective-address wraparound, and enforced
+  `x0`
 - five-bit masking of register-provided shift counts
 - strict reserved ALU-encoding validation before architectural mutation
 - precise, atomic control-flow target validation and link-register updates
+- architectural data-access traps with precise destination, memory, and PC
+  behavior
 - GoogleTest unit tests
 - optional AddressSanitizer and UndefinedBehaviorSanitizer support
 - GCC and Clang GitHub Actions CI
@@ -83,8 +86,8 @@ The CMake library target is `rvemu_core`, with the namespaced alias
 - Bounds and alignment are checked before writes, so a failed operation cannot
   partially mutate memory.
 - Direct memory API failures surface as typed C++ exceptions. The execution
-  layer translates instruction-fetch failures into architectural traps and
-  should do the same for applicable data-access errors in later ISA work.
+  layer translates instruction-fetch and data-access failures into precise
+  architectural traps.
 - Multi-byte memory values are assembled explicitly as little-endian; host
   endianness must not affect behavior.
 - The decoder recognizes major opcodes and normalizes the fields relevant to
@@ -114,6 +117,18 @@ The CMake library target is `rvemu_core`, with the namespaced alias
   validate or trap on their unused target.
 - Control-flow execution uses pending effects: optional destination value plus
   next PC. Preserve this commit-after-validation structure for precise traps.
+- Loads and stores add their sign-extended 12-bit immediate to the original
+  `rs1` value with unsigned 32-bit wraparound. Read source operands before
+  committing any destination so load and store aliasing remains correct.
+- `LB` and `LH` use explicit unsigned sign extension; `LBU` and `LHU` zero
+  extend. Stores explicitly truncate to 8 or 16 bits where applicable.
+- Translate data misalignment and bounds failures to the corresponding load or
+  store architectural trap. A faulting load must not change `rd`; a faulting
+  store must not partially change memory; neither may advance the PC. Loads to
+  `x0` must still access memory and may still trap.
+- Validate reserved load/store `funct3` fields before attempting memory access.
+  Their deterministic `IllegalInstruction` trap carries the raw instruction,
+  not an effective address.
 - JALR only accepts `funct3 == 0`. Branch `funct3` values 2 and 3 are reserved;
   this emulator deterministically returns `IllegalInstruction` without mutation.
 - `StepResult` and `RunResult` are variants, preventing invalid success/trap
@@ -196,18 +211,21 @@ Completed:
 - Milestone 3c: RV32I jumps and conditional branches with precise target
   alignment traps, signed/unsigned decisions, aliasing, wraparound, backward
   targets, and bounded-loop tests.
+- Milestone 3d: RV32I loads and stores with sign/zero extension, truncation,
+  little-endian access, effective-address wraparound, aliasing, and precise data
+  traps.
 
 Next milestone:
 
-- Implement RV32I loads `LB`, `LH`, `LW`, `LBU`, `LHU` and stores `SB`, `SH`,
-  `SW` with modulo-2^32 effective addresses.
-- Add architectural load/store misalignment and access-fault trap causes, and
-  translate typed memory errors without partial register or memory mutation.
-- Test sign/zero extension, offset boundaries, address wraparound, alignment,
-  bounds failures, source/destination aliasing, and faulting loads to `x0`.
+- Complete the remaining base RV32I environment and memory-ordering slice with
+  `FENCE`, `ECALL`, and `EBREAK`.
+- Model `FENCE` consistently with the current single-hart, strongly ordered
+  memory implementation, and return architectural environment-call/breakpoint
+  traps without adding the later host syscall layer yet.
+- Test legal and reserved encodings, precise trap state, bounded-run retirement
+  counts, and the documented single-hart ordering semantics.
 - Update both documentation files, validate, commit, and push.
 
-Later RV32I slices should cover memory, fence/system behavior, and then complete
-RV32I validation. After that: RV32M, ELF loading, syscalls, interactive
+After final RV32I validation: RV32M, ELF loading, syscalls, interactive
 debugging, cache/branch models, reproducible benchmarks, and differential
 testing.

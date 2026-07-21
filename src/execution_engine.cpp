@@ -145,6 +145,78 @@ namespace {
   return (address & 0x3U) == 0U;
 }
 
+[[nodiscard]] constexpr std::uint32_t sign_extend_byte(
+    const std::uint8_t value) noexcept {
+  const std::uint32_t extended = value;
+  return (extended & 0x80U) != 0U ? extended | 0xFFFFFF00U : extended;
+}
+
+[[nodiscard]] constexpr std::uint32_t sign_extend_halfword(
+    const std::uint16_t value) noexcept {
+  const std::uint32_t extended = value;
+  return (extended & 0x8000U) != 0U ? extended | 0xFFFF0000U : extended;
+}
+
+struct ExecutionFailure {
+  TrapCause cause;
+  std::uint32_t value;
+};
+
+using LoadResult = std::variant<std::uint32_t, ExecutionFailure>;
+
+[[nodiscard]] LoadResult execute_load(const DecodedInstruction& instruction,
+                                      Memory& memory,
+                                      const std::uint32_t address) {
+  try {
+    switch (instruction.function3) {
+      case 0x0U:  // LB
+        return sign_extend_byte(memory.read8(address));
+      case 0x1U:  // LH
+        return sign_extend_halfword(memory.read16(address));
+      case 0x2U:  // LW
+        return memory.read32(address);
+      case 0x4U:  // LBU
+        return static_cast<std::uint32_t>(memory.read8(address));
+      case 0x5U:  // LHU
+        return static_cast<std::uint32_t>(memory.read16(address));
+      default:
+        return ExecutionFailure{TrapCause::IllegalInstruction,
+                                instruction.raw};
+    }
+  } catch (const MemoryMisalignmentError&) {
+    return ExecutionFailure{TrapCause::LoadAddressMisaligned, address};
+  } catch (const MemoryOutOfBoundsError&) {
+    return ExecutionFailure{TrapCause::LoadAccessFault, address};
+  }
+}
+
+[[nodiscard]] std::optional<ExecutionFailure> execute_store(
+    const DecodedInstruction& instruction, Memory& memory,
+    const std::uint32_t address, const std::uint32_t value) {
+  try {
+    switch (instruction.function3) {
+      case 0x0U:  // SB
+        memory.write8(address, static_cast<std::uint8_t>(value & 0xFFU));
+        break;
+      case 0x1U:  // SH
+        memory.write16(address, static_cast<std::uint16_t>(value & 0xFFFFU));
+        break;
+      case 0x2U:  // SW
+        memory.write32(address, value);
+        break;
+      default:
+        return ExecutionFailure{TrapCause::IllegalInstruction,
+                                instruction.raw};
+    }
+  } catch (const MemoryMisalignmentError&) {
+    return ExecutionFailure{TrapCause::StoreAddressMisaligned, address};
+  } catch (const MemoryOutOfBoundsError&) {
+    return ExecutionFailure{TrapCause::StoreAccessFault, address};
+  }
+
+  return std::nullopt;
+}
+
 }  // namespace
 
 ExecutionEngine::ExecutionEngine(CpuState& state, Memory& memory) noexcept
@@ -232,6 +304,30 @@ StepResult ExecutionEngine::step() {
           return instruction_trap(TrapCause::InstructionAddressMisaligned,
                                   next_program_counter);
         }
+      }
+      instruction_supported = true;
+      break;
+    }
+    case Opcode::Load: {
+      const std::uint32_t address =
+          state_.read_register(instruction->source1) + instruction->immediate;
+      const LoadResult load_result = execute_load(*instruction, memory_, address);
+      if (const auto* failure = std::get_if<ExecutionFailure>(&load_result);
+          failure != nullptr) {
+        return instruction_trap(failure->cause, failure->value);
+      }
+      destination_value = std::get<std::uint32_t>(load_result);
+      instruction_supported = true;
+      break;
+    }
+    case Opcode::Store: {
+      const std::uint32_t address =
+          state_.read_register(instruction->source1) + instruction->immediate;
+      const auto failure = execute_store(
+          *instruction, memory_, address,
+          state_.read_register(instruction->source2));
+      if (failure.has_value()) {
+        return instruction_trap(failure->cause, failure->value);
       }
       instruction_supported = true;
       break;

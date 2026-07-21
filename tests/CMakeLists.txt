@@ -28,6 +28,7 @@ add_executable(rvemu_tests
   immediate_instructions_test.cpp
   instruction_test.cpp
   memory_test.cpp
+  memory_instructions_test.cpp
   register_instructions_test.cpp
 )
 target_link_libraries(

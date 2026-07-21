@@ -27,15 +27,19 @@ The foundational state, memory, and execution-loop milestones are complete:
 - aligned 32-bit instruction fetch
 - typed step and bounded-run results using architectural instruction trap causes
 - execution of RV32I upper-immediate, integer-immediate, register-register ALU,
-  jump, and conditional-branch groups
+  jump, conditional-branch, load, and store groups
 - host-independent signed comparisons and arithmetic right shifts
 - five-bit masking of register-provided shift counts
 - strict rejection of reserved ALU encodings without state changes
 - precise control-flow traps with atomic PC/link-register effects
+- modulo-2^32 effective-address calculation for data accesses
+- architectural load/store misalignment and access-fault traps with precise
+  register, memory, and PC effects
 - bounded execution of loops through the existing instruction-limit API
 - GoogleTest coverage for state, memory, instruction formats, fetch, execution,
   signed boundaries, shift limits, operand aliasing, PC-relative wraparound,
-  taken and untaken branches, misaligned targets, instruction limits, illegal
+  taken and untaken branches, load extension, little-endian stores, effective
+  address wraparound, misaligned targets and data, instruction limits, illegal
   instructions, and access faults
 - optional AddressSanitizer and UndefinedBehaviorSanitizer instrumentation
 - GitHub Actions validation with GCC and Clang
@@ -53,6 +57,8 @@ model, or published benchmark result.
 | Register-register ALU | `ADD`, `SUB`, `SLL`, `SLT`, `SLTU`, `XOR`, `SRL`, `SRA`, `OR`, `AND` |
 | Jumps | `JAL`, `JALR` |
 | Conditional branches | `BEQ`, `BNE`, `BLT`, `BGE`, `BLTU`, `BGEU` |
+| Loads | `LB`, `LH`, `LW`, `LBU`, `LHU` |
+| Stores | `SB`, `SH`, `SW` |
 
 Instruction behavior follows the
 [RV32I Base Integer Instruction Set, version 2.1](https://docs.riscv.org/reference/isa/v20260120/unpriv/rv32.html).
@@ -86,6 +92,14 @@ Execution computes pending effects before committing them. A misaligned taken
 jump or branch therefore traps at the control-transfer instruction without
 changing its link register or PC. Untaken branches advance normally without
 validating an unused target.
+
+Loads and stores add their sign-extended immediate to the original base-register
+value with 32-bit wraparound. Loads explicitly sign- or zero-extend their result,
+and stores truncate to the selected width. Data-memory exceptions become precise
+architectural traps: a failed load leaves its destination unchanged, a failed
+store cannot partially alter memory, and either failure leaves the PC at the
+faulting instruction. Even a load targeting `x0` still performs the access and
+can trap.
 
 Signed comparisons use sign-bit-biased unsigned ordering, and arithmetic right
 shift explicitly constructs the sign-fill bits. This keeps RV32I behavior
@@ -166,7 +180,7 @@ Callers can inspect `StepResult` as either `StepCompleted` or `Trap`. A bounded
    aligned fetch, typed traps, and bounded step/run execution.
 3. **In progress:** implement and exhaustively test RV32I in focused instruction
    families; upper-immediate, integer-immediate, and register-register ALU
-   operations plus control flow are complete.
+   operations, control flow, loads, and stores are complete.
 4. Implement and exhaustively test the RV32M extension.
 5. Load validated 32-bit little-endian RISC-V ELF files.
 6. Add a minimal system-call environment for output and termination.
@@ -183,8 +197,8 @@ Callers can inspect `StepResult` as either `StepCompleted` or `Trap`. A bounded
   currently produce an `IllegalInstruction` trap until implemented.
 - Decoding currently validates the major opcode and reconstructs its format;
   instruction-specific function-field validation occurs in the execution layer.
-- Memory APIs use typed C++ exceptions. Instruction-fetch failures are translated
-  into architectural trap results by `ExecutionEngine`.
+- Memory APIs use typed C++ exceptions. Instruction-fetch and data-access
+  failures are translated into architectural trap results by `ExecutionEngine`.
 - There is no CSR or architectural trap-handler state yet; traps are returned to
   the host caller.
 - There are no performance claims or results yet.

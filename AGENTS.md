@@ -13,8 +13,8 @@ Correctness takes priority over optimization.
 
 ## Current state
 
-Milestones 1 and 2 plus the first RV32I instruction slice are complete. The
-repository has:
+Milestones 1 and 2 plus the first two RV32I instruction slices are complete.
+The repository has:
 
 - C++20/CMake project scaffolding
 - a reusable `rvemu::core` library
@@ -30,10 +30,12 @@ repository has:
 - `ExecutionEngine` with aligned fetch, decode, a strict instruction limit, and
   first-trap termination
 - tested execution of `LUI`, `AUIPC`, `ADDI`, `SLTI`, `SLTIU`, `XORI`, `ORI`,
-  `ANDI`, `SLLI`, `SRLI`, and `SRAI`
+  `ANDI`, `SLLI`, `SRLI`, `SRAI`, `ADD`, `SUB`, `SLL`, `SLT`, `SLTU`, `XOR`,
+  `SRL`, `SRA`, `OR`, and `AND`
 - modulo-2^32 arithmetic, PC-relative wraparound, host-independent signed
   comparison and arithmetic shift, and enforced `x0`
-- strict reserved shift-immediate validation before architectural mutation
+- five-bit masking of register-provided shift counts
+- strict reserved ALU-encoding validation before architectural mutation
 - GoogleTest unit tests
 - optional AddressSanitizer and UndefinedBehaviorSanitizer support
 - GCC and Clang GitHub Actions CI
@@ -96,6 +98,12 @@ The CMake library target is `rvemu_core`, with the namespaced alias
   register or PC mutation. RV32I leaves reserved-instruction behavior
   unspecified; deterministic `IllegalInstruction` is this emulator's platform
   policy.
+- RV32I register-register ALU encodings use `funct7 == 0x00`, except `SUB` and
+  `SRA`, which use `0x20`. Register shift counts are always masked with `0x1f`.
+- Both register operands are read before the destination is written. Preserve
+  this ordering so destination/source aliasing remains architecturally correct.
+- `funct7 == 0x01` register operations are RV32M encodings. They intentionally
+  trap until the M extension milestone and must not be mislabeled as RV32I.
 - `StepResult` and `RunResult` are variants, preventing invalid success/trap
   combinations. A trapping instruction is not counted as retired and leaves the
   PC at its address.
@@ -171,18 +179,21 @@ Completed:
   implementation.
 - Milestone 3a: RV32I upper-immediate and integer-immediate instructions with
   signed-boundary, shift, PC-relative, reserved-encoding, and `x0` tests.
+- Milestone 3b: RV32I register-register ALU instructions with exact `funct7`
+  validation, five-bit shift masking, overflow, aliasing, and `x0` tests.
 
 Next milestone:
 
-- Implement the RV32I register-register ALU group: `ADD`, `SUB`, `SLL`, `SLT`,
-  `SLTU`, `XOR`, `SRL`, `SRA`, `OR`, and `AND`.
-- Mask register-provided shift counts to five bits and validate the exact legal
-  `funct7` values before architectural mutation.
-- Add focused overflow, signed-boundary, large shift-source, reserved-encoding,
-  aliasing, and `x0` tests.
+- Implement RV32I control flow: `JAL`, `JALR`, `BEQ`, `BNE`, `BLT`, `BGE`,
+  `BLTU`, and `BGEU`.
+- Calculate targets with modulo-2^32 arithmetic and enforce `IALIGN=32` at the
+  control-transfer instruction before link-register or PC mutation.
+- Test taken and not-taken branches, signed/unsigned boundaries, backward and
+  wraparound targets, JALR bit-zero clearing, link aliasing, and misaligned
+  targets without side effects.
 - Update both documentation files, validate, commit, and push.
 
-Later RV32I slices should cover register-register ALU, control flow, memory,
-fence/system behavior, and then complete RV32I validation. After that: RV32M,
-ELF loading, syscalls, interactive debugging, cache/branch models, reproducible
-benchmarks, and differential testing.
+Later RV32I slices should cover control flow, memory, fence/system behavior, and
+then complete RV32I validation. After that: RV32M, ELF loading, syscalls,
+interactive debugging, cache/branch models, reproducible benchmarks, and
+differential testing.

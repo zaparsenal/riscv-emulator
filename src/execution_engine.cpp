@@ -62,6 +62,63 @@ namespace {
   }
 }
 
+[[nodiscard]] std::optional<std::uint32_t> execute_op(
+    const DecodedInstruction& instruction, const std::uint32_t source1,
+    const std::uint32_t source2) noexcept {
+  const std::uint32_t shift_amount = source2 & 0x1FU;
+
+  switch (instruction.function3) {
+    case 0x0U:  // ADD/SUB
+      if (instruction.function7 == 0x00U) {
+        return source1 + source2;
+      }
+      if (instruction.function7 == 0x20U) {
+        return source1 - source2;
+      }
+      return std::nullopt;
+    case 0x1U:  // SLL
+      if (instruction.function7 != 0x00U) {
+        return std::nullopt;
+      }
+      return source1 << shift_amount;
+    case 0x2U:  // SLT
+      if (instruction.function7 != 0x00U) {
+        return std::nullopt;
+      }
+      return signed_less_than(source1, source2) ? 1U : 0U;
+    case 0x3U:  // SLTU
+      if (instruction.function7 != 0x00U) {
+        return std::nullopt;
+      }
+      return source1 < source2 ? 1U : 0U;
+    case 0x4U:  // XOR
+      if (instruction.function7 != 0x00U) {
+        return std::nullopt;
+      }
+      return source1 ^ source2;
+    case 0x5U:  // SRL/SRA
+      if (instruction.function7 == 0x00U) {
+        return source1 >> shift_amount;
+      }
+      if (instruction.function7 == 0x20U) {
+        return arithmetic_shift_right(source1, shift_amount);
+      }
+      return std::nullopt;
+    case 0x6U:  // OR
+      if (instruction.function7 != 0x00U) {
+        return std::nullopt;
+      }
+      return source1 | source2;
+    case 0x7U:  // AND
+      if (instruction.function7 != 0x00U) {
+        return std::nullopt;
+      }
+      return source1 & source2;
+    default:
+      return std::nullopt;
+  }
+}
+
 }  // namespace
 
 ExecutionEngine::ExecutionEngine(CpuState& state, Memory& memory) noexcept
@@ -98,6 +155,11 @@ StepResult ExecutionEngine::step() {
     case Opcode::OpImmediate:
       destination_value = execute_op_immediate(
           *instruction, state_.read_register(instruction->source1));
+      break;
+    case Opcode::Op:
+      destination_value = execute_op(
+          *instruction, state_.read_register(instruction->source1),
+          state_.read_register(instruction->source2));
       break;
     default:
       break;

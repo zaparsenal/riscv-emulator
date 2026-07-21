@@ -178,9 +178,9 @@ TEST(ExecutionEngineTest, TrapsOnDecodedButNotYetImplementedInstruction) {
   CpuState state;
   Memory memory(kBaseAddress, 4U);
   state.set_program_counter(kBaseAddress);
-  constexpr std::uint32_t add =
-      (1U << 7U) | static_cast<std::uint8_t>(Opcode::Op);
-  memory.write32(kBaseAddress, add);
+  constexpr std::uint32_t jal =
+      (1U << 7U) | static_cast<std::uint8_t>(Opcode::Jal);
+  memory.write32(kBaseAddress, jal);
   ExecutionEngine engine(state, memory);
 
   const StepResult result = engine.step();

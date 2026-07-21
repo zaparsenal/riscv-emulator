@@ -26,12 +26,14 @@ The foundational state, memory, and execution-loop milestones are complete:
 - recognition of the RV32I major opcodes
 - aligned 32-bit instruction fetch
 - typed step and bounded-run results using architectural instruction trap causes
-- execution of the RV32I upper-immediate and integer-immediate groups
+- execution of the RV32I upper-immediate, integer-immediate, and
+  register-register ALU groups
 - host-independent signed comparisons and arithmetic right shifts
-- strict rejection of reserved shift-immediate encodings without state changes
+- five-bit masking of register-provided shift counts
+- strict rejection of reserved ALU encodings without state changes
 - GoogleTest coverage for state, memory, instruction formats, fetch, execution,
-  signed boundaries, shift limits, PC-relative wraparound, instruction limits,
-  illegal instructions, and access faults
+  signed boundaries, shift limits, operand aliasing, PC-relative wraparound,
+  instruction limits, illegal instructions, and access faults
 - optional AddressSanitizer and UndefinedBehaviorSanitizer instrumentation
 - GitHub Actions validation with GCC and Clang
 
@@ -45,6 +47,7 @@ model, or published benchmark result.
 | --- | --- |
 | Upper immediate | `LUI`, `AUIPC` |
 | Integer immediate | `ADDI`, `SLTI`, `SLTIU`, `XORI`, `ORI`, `ANDI`, `SLLI`, `SRLI`, `SRAI` |
+| Register-register ALU | `ADD`, `SUB`, `SLL`, `SLT`, `SLTU`, `XOR`, `SRL`, `SRA`, `OR`, `AND` |
 
 Instruction behavior follows the
 [RV32I Base Integer Instruction Set, version 2.1](https://docs.riscv.org/reference/isa/v20260120/unpriv/rv32.html).
@@ -152,7 +155,8 @@ Callers can inspect `StepResult` as either `StepCompleted` or `Trap`. A bounded
 2. **Complete:** instruction representation, all base instruction formats,
    aligned fetch, typed traps, and bounded step/run execution.
 3. **In progress:** implement and exhaustively test RV32I in focused instruction
-   families; upper-immediate and integer-immediate operations are complete.
+   families; upper-immediate, integer-immediate, and register-register ALU
+   operations are complete.
 4. Implement and exhaustively test the RV32M extension.
 5. Load validated 32-bit little-endian RISC-V ELF files.
 6. Add a minimal system-call environment for output and termination.

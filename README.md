@@ -26,16 +26,34 @@ The foundational state, memory, and execution-loop milestones are complete:
 - recognition of the RV32I major opcodes
 - aligned 32-bit instruction fetch
 - typed step and bounded-run results using architectural instruction trap causes
-- execution of `ADDI`, including modulo-2^32 arithmetic and `x0` behavior
+- execution of the RV32I upper-immediate and integer-immediate groups
+- host-independent signed comparisons and arithmetic right shifts
+- strict rejection of reserved shift-immediate encodings without state changes
 - GoogleTest coverage for state, memory, instruction formats, fetch, execution,
-  PC updates, instruction limits, illegal instructions, and access faults
+  signed boundaries, shift limits, PC-relative wraparound, instruction limits,
+  illegal instructions, and access faults
 - optional AddressSanitizer and UndefinedBehaviorSanitizer instrumentation
 - GitHub Actions validation with GCC and Clang
 
-`ADDI` is the only executable instruction. RV32I is therefore not complete, and
-RV32M has not started. There is currently no command-line executable, ELF
-loader, system-call layer, debugger, performance model, or published benchmark
-result.
+RV32I is not complete, and RV32M has not started. There is currently no
+command-line executable, ELF loader, system-call layer, debugger, performance
+model, or published benchmark result.
+
+## Supported instructions
+
+| Group | Instructions |
+| --- | --- |
+| Upper immediate | `LUI`, `AUIPC` |
+| Integer immediate | `ADDI`, `SLTI`, `SLTIU`, `XORI`, `ORI`, `ANDI`, `SLLI`, `SRLI`, `SRAI` |
+
+Instruction behavior follows the
+[RV32I Base Integer Instruction Set, version 2.1](https://docs.riscv.org/reference/isa/v20260120/unpriv/rv32.html).
+Where the specification leaves reserved encodings unspecified, this emulator
+chooses a deterministic `IllegalInstruction` trap.
+
+All other instructions currently return an `IllegalInstruction` trap. This is a
+temporary implementation boundary, not a claim that architecturally valid
+instructions are illegal in RV32I.
 
 ## Architecture
 
@@ -55,6 +73,10 @@ The implementation currently builds one reusable library, `rvemu::core`:
   decodes, and executes one instruction. `run(limit)` executes until its strict
   instruction limit or the first trap. Both APIs return variants, so successful
   execution cannot be confused with a trap.
+
+Signed comparisons use sign-bit-biased unsigned ordering, and arithmetic right
+shift explicitly constructs the sign-fill bits. This keeps RV32I behavior
+independent of the host compiler's signed-shift and overflow choices.
 
 Keeping CPU state, memory, decoding, and execution independently testable gives
 later ELF loading, debugging, and performance models clear integration points.
@@ -129,7 +151,8 @@ Callers can inspect `StepResult` as either `StepCompleted` or `Trap`. A bounded
    memory, tests, sanitizers, and CI.
 2. **Complete:** instruction representation, all base instruction formats,
    aligned fetch, typed traps, and bounded step/run execution.
-3. Implement and exhaustively test RV32I.
+3. **In progress:** implement and exhaustively test RV32I in focused instruction
+   families; upper-immediate and integer-immediate operations are complete.
 4. Implement and exhaustively test the RV32M extension.
 5. Load validated 32-bit little-endian RISC-V ELF files.
 6. Add a minimal system-call environment for output and termination.
@@ -142,8 +165,8 @@ Callers can inspect `StepResult` as either `StepCompleted` or `Trap`. A bounded
 
 - Memory is one contiguous mapped region, not yet a sparse address map or bus.
 - Misaligned halfword and word accesses always fail; no emulation mode exists.
-- Only `ADDI` executes. Other recognized opcodes currently produce an
-  `IllegalInstruction` trap until their semantics are implemented.
+- Only the instructions in the support table execute. Other recognized opcodes
+  currently produce an `IllegalInstruction` trap until implemented.
 - Decoding currently validates the major opcode and reconstructs its format;
   instruction-specific function-field validation occurs in the execution layer.
 - Memory APIs use typed C++ exceptions. Instruction-fetch failures are translated

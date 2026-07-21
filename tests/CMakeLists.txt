@@ -24,6 +24,7 @@ endif()
 add_executable(rvemu_tests
   cpu_state_test.cpp
   execution_engine_test.cpp
+  immediate_instructions_test.cpp
   instruction_test.cpp
   memory_test.cpp
 )

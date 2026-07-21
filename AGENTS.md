@@ -13,7 +13,8 @@ Correctness takes priority over optimization.
 
 ## Current state
 
-Milestones 1 and 2 are complete. The repository has:
+Milestones 1 and 2 plus the first RV32I instruction slice are complete. The
+repository has:
 
 - C++20/CMake project scaffolding
 - a reusable `rvemu::core` library
@@ -28,16 +29,19 @@ Milestones 1 and 2 are complete. The repository has:
 - architectural instruction trap causes and variant-based step/run result types
 - `ExecutionEngine` with aligned fetch, decode, a strict instruction limit, and
   first-trap termination
-- tested `ADDI` execution with modulo-2^32 arithmetic and enforced `x0`
+- tested execution of `LUI`, `AUIPC`, `ADDI`, `SLTI`, `SLTIU`, `XORI`, `ORI`,
+  `ANDI`, `SLLI`, `SRLI`, and `SRAI`
+- modulo-2^32 arithmetic, PC-relative wraparound, host-independent signed
+  comparison and arithmetic shift, and enforced `x0`
+- strict reserved shift-immediate validation before architectural mutation
 - GoogleTest unit tests
 - optional AddressSanitizer and UndefinedBehaviorSanitizer support
 - GCC and Clang GitHub Actions CI
 - a pinned GoogleTest source dependency by default, avoiding host-package ABI
   mismatches; `RVEMU_USE_SYSTEM_GTEST=ON` is an explicit opt-in
 
-`ADDI` is the only executable instruction, so RV32I remains incomplete. There is
-no executable, ELF loader, syscall layer, debugger, performance model, or
-benchmark suite yet.
+RV32I remains incomplete. There is no executable, ELF loader, syscall layer,
+debugger, performance model, or benchmark suite yet.
 
 ## Architecture and directory structure
 
@@ -48,7 +52,7 @@ include/rvemu/execution_engine.hpp Public trap, result, and execution-loop API
 include/rvemu/memory.hpp     Public checked-memory API and error types
 src/cpu_state.cpp            CPU-state implementation
 src/instruction.cpp          Format decoding and immediate reconstruction
-src/execution_engine.cpp     Fetch, ADDI execution, step, and bounded run
+src/execution_engine.cpp     Fetch, current ISA execution, step, and bounded run
 src/memory.cpp               Little-endian memory implementation
 tests/                       Focused GoogleTest unit tests
 cmake/ProjectOptions.cmake   Warnings, C++20, and sanitizer settings
@@ -83,6 +87,15 @@ The CMake library target is `rvemu_core`, with the namespaced alias
   each format. Instruction-specific legality checks belong to execution.
 - Encoded immediates remain `std::uint32_t`; sign extension uses unsigned bit
   operations so later arithmetic has defined modulo-2^32 behavior.
+- Signed comparisons XOR both operands with `0x80000000` before unsigned
+  comparison. This produces RV32 signed ordering without host signed casts.
+- Arithmetic right shift uses an unsigned logical shift plus an explicit
+  sign-fill mask. Never replace it with a right shift of a negative host value.
+- RV32I shift-immediate encodings are legal only with `funct7 == 0x00` for
+  `SLLI`/`SRLI`, or `funct7 == 0x20` for `SRAI`. Reserved encodings trap before
+  register or PC mutation. RV32I leaves reserved-instruction behavior
+  unspecified; deterministic `IllegalInstruction` is this emulator's platform
+  policy.
 - `StepResult` and `RunResult` are variants, preventing invalid success/trap
   combinations. A trapping instruction is not counted as retired and leaves the
   PC at its address.
@@ -156,15 +169,17 @@ Completed:
 - Milestone 2: decoded instruction formats, aligned fetch, architectural
   instruction traps, bounded step/run execution, and the initial `ADDI`
   implementation.
+- Milestone 3a: RV32I upper-immediate and integer-immediate instructions with
+  signed-boundary, shift, PC-relative, reserved-encoding, and `x0` tests.
 
 Next milestone:
 
-- Implement the RV32I upper-immediate and integer-immediate instruction groups:
-  `LUI`, `AUIPC`, `SLTI`, `SLTIU`, `XORI`, `ORI`, `ANDI`, `SLLI`, `SRLI`, and
-  `SRAI` (with existing `ADDI`).
-- Validate reserved shift-immediate encodings and trap without architectural
-  side effects.
-- Add focused signed-boundary, shift-count, overflow, `x0`, and PC-relative tests.
+- Implement the RV32I register-register ALU group: `ADD`, `SUB`, `SLL`, `SLT`,
+  `SLTU`, `XOR`, `SRL`, `SRA`, `OR`, and `AND`.
+- Mask register-provided shift counts to five bits and validate the exact legal
+  `funct7` values before architectural mutation.
+- Add focused overflow, signed-boundary, large shift-source, reserved-encoding,
+  aliasing, and `x0` tests.
 - Update both documentation files, validate, commit, and push.
 
 Later RV32I slices should cover register-register ALU, control flow, memory,

@@ -129,6 +129,8 @@ TEST(ElfLoaderTest, LoadsFileBytesZeroFillsAndChangesOnlyTheProgramCounter) {
   EXPECT_EQ(success.loadable_segments, 1U);
   EXPECT_EQ(success.file_bytes_loaded, 4U);
   EXPECT_EQ(success.zero_fill_bytes, 4U);
+  EXPECT_EQ(success.loaded_address_begin, 0x1000U);
+  EXPECT_EQ(success.loaded_address_end_exclusive, 0x1008U);
   EXPECT_EQ(state.program_counter(), 0x1000U);
   EXPECT_EQ(state.read_register(5U), 0xA5A5A5A5U);
   EXPECT_EQ(memory.read32(0x1000U), 0x00000013U);
@@ -159,7 +161,10 @@ TEST(ElfLoaderTest, LoadsDisjointSegmentsAndIgnoresPhysicalAddressesAndNotes) {
   const ElfLoadResult result = load_elf32(make_elf(segments), state, memory);
 
   ASSERT_TRUE(std::holds_alternative<ElfLoadSuccess>(result));
-  EXPECT_EQ(std::get<ElfLoadSuccess>(result).loadable_segments, 2U);
+  const ElfLoadSuccess success = std::get<ElfLoadSuccess>(result);
+  EXPECT_EQ(success.loadable_segments, 2U);
+  EXPECT_EQ(success.loaded_address_begin, 0x1000U);
+  EXPECT_EQ(success.loaded_address_end_exclusive, 0x1014U);
   EXPECT_EQ(memory.read32(0x1000U), 0x00000013U);
   EXPECT_EQ(memory.read32(0x1010U), 0x12345678U);
 }
@@ -178,6 +183,10 @@ TEST(ElfLoaderTest, AcceptsNoAlignmentAndEndsAtTopOfAddressSpace) {
       load_elf32(make_elf(segments, 0xFFFFFFF8U), state, memory);
 
   ASSERT_TRUE(std::holds_alternative<ElfLoadSuccess>(result));
+  EXPECT_EQ(std::get<ElfLoadSuccess>(result).loaded_address_begin,
+            0xFFFFFFF8U);
+  EXPECT_EQ(std::get<ElfLoadSuccess>(result).loaded_address_end_exclusive,
+            0x100000000ULL);
   EXPECT_EQ(memory.read32(0xFFFFFFF8U), 0x00000013U);
   EXPECT_EQ(memory.read32(0xFFFFFFFCU), 0U);
 }
@@ -201,7 +210,10 @@ TEST(ElfLoaderTest, AcceptsZeroAlignmentAndAFileEmptyLoadSegment) {
   const ElfLoadResult result = load_elf32(make_elf(segments), state, memory);
 
   ASSERT_TRUE(std::holds_alternative<ElfLoadSuccess>(result));
-  EXPECT_EQ(std::get<ElfLoadSuccess>(result).loadable_segments, 2U);
+  const ElfLoadSuccess success = std::get<ElfLoadSuccess>(result);
+  EXPECT_EQ(success.loadable_segments, 2U);
+  EXPECT_EQ(success.loaded_address_begin, 0x1000U);
+  EXPECT_EQ(success.loaded_address_end_exclusive, 0x100CU);
   EXPECT_EQ(memory.read32(0x1008U), 0U);
 }
 

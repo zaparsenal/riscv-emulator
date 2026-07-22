@@ -206,6 +206,7 @@ ElfLoadResult load_elf32(const std::span<const std::uint8_t> image,
   std::vector<LoadSegment> load_segments;
   load_segments.reserve(program_header_count);
   std::optional<std::uint32_t> previous_virtual_address;
+  std::optional<std::uint32_t> first_nonempty_address;
   std::optional<std::uint64_t> previous_nonempty_end;
 
   for (std::size_t index = 0U; index < program_header_count; ++index) {
@@ -264,6 +265,9 @@ ElfLoadResult load_elf32(const std::span<const std::uint8_t> image,
           virtual_address < *previous_nonempty_end) {
         return failure(ElfLoadErrorCode::OverlappingLoadSegments, index);
       }
+      if (!first_nonempty_address.has_value()) {
+        first_nonempty_address = virtual_address;
+      }
       previous_nonempty_end = segment_end;
     }
 
@@ -315,7 +319,8 @@ ElfLoadResult load_elf32(const std::span<const std::uint8_t> image,
 
   return ElfLoadSuccess{entry_point,
                         static_cast<std::size_t>(nonempty_segment_count),
-                        file_bytes_loaded, zero_fill_bytes};
+                        file_bytes_loaded, zero_fill_bytes,
+                        *first_nonempty_address, *previous_nonempty_end};
 }
 
 ElfLoadResult load_elf32_file(const std::filesystem::path& path,

@@ -35,6 +35,8 @@ add_executable(rvemu_tests
   m_extension_instructions_test.cpp
   program_session_test.cpp
   register_instructions_test.cpp
+  rvemu_cli_test.cpp
+  stack_test.cpp
   system_instructions_test.cpp
 )
 target_link_libraries(
@@ -42,6 +44,7 @@ target_link_libraries(
   PRIVATE
     rvemu::core
     rvemu::act_smoke_support
+    rvemu::cli_support
     rvemu_project_options
     GTest::gtest_main
 )

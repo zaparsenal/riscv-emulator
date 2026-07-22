@@ -58,6 +58,8 @@ struct ElfLoadSuccess {
   std::size_t loadable_segments;
   std::uint64_t file_bytes_loaded;
   std::uint64_t zero_fill_bytes;
+  std::uint32_t loaded_address_begin;
+  std::uint64_t loaded_address_end_exclusive;
 };
 
 using ElfLoadResult = std::variant<ElfLoadSuccess, ElfLoadFailure>;

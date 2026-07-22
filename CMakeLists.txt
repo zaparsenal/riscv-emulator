@@ -18,6 +18,7 @@ add_library(rvemu_core
   src/linux_syscalls.cpp
   src/memory.cpp
   src/program_session.cpp
+  src/stack.cpp
 )
 add_library(rvemu::core ALIAS rvemu_core)
 
@@ -27,6 +28,34 @@ target_include_directories(rvemu_core
     $<INSTALL_INTERFACE:include>
 )
 target_link_libraries(rvemu_core PRIVATE rvemu_project_options)
+
+option(
+  RVEMU_BUILD_CLI
+  "Build the rvemu command-line frontend"
+  ON
+)
+
+if(RVEMU_BUILD_CLI OR BUILD_TESTING)
+  add_library(rvemu_cli_support STATIC
+    app/rvemu_cli.cpp
+  )
+  add_library(rvemu::cli_support ALIAS rvemu_cli_support)
+  target_include_directories(rvemu_cli_support PUBLIC app)
+  target_link_libraries(
+    rvemu_cli_support
+    PUBLIC rvemu::core
+    PRIVATE rvemu_project_options
+  )
+endif()
+
+if(RVEMU_BUILD_CLI)
+  add_executable(rvemu_cli app/rvemu_main.cpp)
+  set_target_properties(rvemu_cli PROPERTIES OUTPUT_NAME rvemu)
+  target_link_libraries(
+    rvemu_cli
+    PRIVATE rvemu::cli_support rvemu_project_options
+  )
+endif()
 
 option(
   RVEMU_BUILD_ACT_SMOKE_RUNNER

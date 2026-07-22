@@ -4,11 +4,22 @@
     "commit": "585fbaf97a7df6e2f0fe8808edd3ad839eb1afe3",
     "framework_version_at_commit": "0.3.0"
   },
+  "container": {
+    "image": "ghcr.io/riscv/act4-build",
+    "digest": "sha256:e2a3982d778cfa5b85502b71dc7cb90891c4119d0b9335f4aa74e71a2206e0e4",
+    "source_workflow_run": "https://github.com/riscv/riscv-arch-test/actions/runs/29643967685",
+    "linux_amd64_manifest": "sha256:77be5205973ec5bc8a161a958aa29bdb0cba041c8a4bf7be57f601466a77d875",
+    "linux_arm64_manifest": "sha256:af3aa4e00e39d5457416dc976d47c84aa030733c8fba70645eb2848c43aca98f"
+  },
   "reference_baseline": {
-    "configuration": "config/sail/sail-RVI20U32",
+    "configuration": "conformance/act4/config/test_config.yaml",
+    "sail_configuration_source": "config/sail/sail-RVI20U32/sail.json",
     "sail_riscv": "0.12",
-    "riscv_gcc": "15",
-    "binutils": "2.44"
+    "riscv_gcc": "16.1.0",
+    "binutils": "2.46",
+    "udb": "0.1.13",
+    "uv": "0.11.28",
+    "ruby": "3.4.10"
   },
   "rvemu_target": {
     "xlen": 32,

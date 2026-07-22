@@ -13,9 +13,9 @@ Correctness takes priority over optimization.
 
 ## Current state
 
-Milestones 1 through 5 are complete, including the full RV32IM instruction set
-and static ELF32 loading. Milestone 6 has begun with a shared program-session
-foundation. The repository has:
+Milestones 1 through 6 are complete, including the full RV32IM instruction set,
+static ELF32 loading, hosted syscalls, freestanding stack setup, and a runnable
+command-line frontend. The repository has:
 
 - C++20/CMake project scaffolding
 - a reusable `rvemu::core` library
@@ -55,6 +55,8 @@ foundation. The repository has:
   fill, executable entry-point initialization, and all-or-nothing failure
 - typed ELF load failures covering format, compatibility, bounds, alignment,
   ordering, overlap, entry point, and file-I/O problems
+- successful ELF metadata containing the lowest and exclusive-highest occupied
+  addresses across nonempty loadable segments
 - `ProgramSession`, which delegates normal execution to `ExecutionEngine` and
   dispatches precise user environment-call traps through an injected handler
 - RV32 Linux-style environment-call capture from `a7` and `a0` through `a5`
@@ -67,24 +69,32 @@ foundation. The repository has:
 - `LinuxSyscallEnvironment` with injected stdout/stderr output, `write` (64),
   `exit` (93), `exit_group` (94), Linux-style error returns, and precise session
   integration
+- `initialize_freestanding_stack` with checked 16-byte alignment, image-overlap
+  detection, typed errors, and failure nonmutation
+- a pure CLI parser, binary-safe standard-stream sink, typed hosted runner, and
+  `rvemu` executable with configurable mapping, stack, and strict step limit
+- normal guest exit-status propagation and precise diagnostics for loader,
+  stack, limit, trap, unhandled-call, breakpoint, and host failures
 - `rvemu-act-smoke` support that classifies self-checking ELF pass/fail outcomes
   separately from loader, trap, unknown-call, breakpoint, and limit failures
-- pinned ACT 4 metadata, non-privileged halt macros, linker script, and ten-test
-  RV32I/M smoke manifest; no official generated test has been run yet
+- an immutable official ACT image pin, observed tool versions, I/M-oriented UDB
+  and derived Sail configuration, clean generation harness, compatibility
+  auditor, non-privileged halt macros, linker script, and ten-test smoke manifest
 - GoogleTest unit tests
 - optional AddressSanitizer and UndefinedBehaviorSanitizer support
 - GCC and Clang GitHub Actions CI
 - a pinned GoogleTest source dependency by default, avoiding host-package ABI
   mismatches; `RVEMU_USE_SYSTEM_GTEST=ON` is an explicit opt-in
 
-RV32IM, the static ELF loader, the shared program-session contract, and minimal
-output/termination syscalls are complete. There is no stack initializer,
-command-line executable, interactive debugger, performance model, or benchmark
-suite yet.
+RV32IM, the static ELF loader, shared program-session contract, minimal
+output/termination syscalls, freestanding stack initializer, and command-line
+runner are complete. There is no full process-startup image, interactive
+debugger, performance model, or benchmark suite yet.
 
-The initial ACT 4 smoke-runner plumbing is complete, but it is not a conformance
-result. Official generation and Sail comparison remain blocked on a validated
-I/M-only UDB configuration and an immutable tool container.
+The ACT 4 harness generated all 47 selected non-privileged RV32I/M ELFs from
+Sail results, but it is not a conformance result. The compatibility audit stops
+before execution because all files are spuriously RVC-flagged and each contains
+three unsupported CSR reads in ACT's failure-diagnostic path.
 
 ## Architecture and directory structure
 
@@ -96,6 +106,10 @@ include/rvemu/execution_engine.hpp Public trap, result, and execution-loop API
 include/rvemu/linux_syscalls.hpp Public output sink and hosted Linux-call API
 include/rvemu/memory.hpp     Public checked-memory API and error types
 include/rvemu/program_session.hpp Public hosted-run and environment-call API
+include/rvemu/stack.hpp      Public freestanding stack-initialization API
+app/rvemu_cli.hpp            Testable command-line and hosted-run API
+app/rvemu_cli.cpp            Parsing, stream output, orchestration, diagnostics
+app/rvemu_main.cpp           Process entry point and exception boundary
 tools/act_smoke.hpp         Typed self-checking ELF smoke-runner API
 tools/act_smoke.cpp         ACT load, execution, and result classification
 tools/act_smoke_main.cpp    `rvemu-act-smoke` reporting executable
@@ -107,6 +121,7 @@ src/execution_engine.cpp     Fetch, current ISA execution, step, and bounded run
 src/linux_syscalls.cpp       Hosted write/exit syscall policy and validation
 src/memory.cpp               Little-endian memory implementation
 src/program_session.cpp      Hosted execution, call dispatch, and breakpoints
+src/stack.cpp                Checked 16-byte-aligned stack placement
 tests/                       Focused GoogleTest unit tests
 cmake/ProjectOptions.cmake   Warnings, C++20, and sanitizer settings
 .github/workflows/ci.yml     GCC/Clang sanitizer CI
@@ -114,7 +129,8 @@ README.md                    Human-facing project documentation
 ```
 
 The CMake library target is `rvemu_core`, with the namespaced alias
-`rvemu::core`.
+`rvemu::core`. `rvemu_cli_support` (`rvemu::cli_support`) contains the testable
+frontend policy, and the `rvemu_cli` target produces the `rvemu` executable.
 
 ## Design decisions
 
@@ -268,13 +284,27 @@ The CMake library target is `rvemu_core`, with the namespaced alias
 - `rvemu-act-smoke` prints ACT's exact `RVCP-SUMMARY` form only for pass or test
   failure. Its process statuses are 0 pass, 1 test failure, and 2 infrastructure
   failure.
-- `RVEMU_BUILD_ACT_SMOKE_RUNNER` defaults off so `BUILD_TESTING=OFF` continues
-  to build only `rvemu_core`. Test-enabled builds compile the runner regardless,
-  and no-test builds may opt in explicitly.
+- `RVEMU_BUILD_ACT_SMOKE_RUNNER` defaults off. Test-enabled builds compile the
+  runner regardless, and no-test builds may opt in explicitly. With the CLI's
+  default enabled, `BUILD_TESTING=OFF` builds `rvemu_core` and `rvemu`; add
+  `RVEMU_BUILD_CLI=OFF` for a core-only build.
 - Treat `conformance/act4/pins.json` and its adjacent macro, linker, manifest,
-  and README as the current runner contract. It pins the ACT commit and records
-  the reference versions, but does not replace an immutable container digest or
-  prove that the official generated tests ran.
+  configuration, audit, generation script, and README as the current runner
+  contract. The official image is pinned by immutable multi-arch digest with
+  Sail 0.12, GCC 16.1.0, binutils 2.46, and UDB 0.1.13 as observed versions.
+- UDB 0.1.13 requires an `Sm` scaffold to define `MXLEN` and `MUTABLE_MISA_M`,
+  even for an I/M-only non-privileged selection. Keep privileged tests disabled,
+  do not define `STANDARD_SM_SUPPORTED`, and do not mistake the scaffold for
+  machine-mode or CSR support.
+- The pinned ACT run selects 47 non-privileged RV32I/M tests and completes 188
+  build tasks. Audit every generated ELF before selecting the ten-file smoke
+  subset. Unknown objdump directives, non-32-bit encodings, unsupported
+  opcodes, unexpected system instructions, flags, attributes, or ECALL counts
+  must block execution.
+- Current pinned output is intentionally blocked: 47 RVC flags, zero 16-bit
+  instructions, and 141 unsupported CSR reads (mcause, mtval, and mstatus once
+  per ELF) in `failedtest_trap_x7_x9`. Do not clear flags, relax the loader, or
+  claim a conformance pass while that diagnostic dependency remains.
 - The ELF loader supports fixed-address, 32-bit, little-endian RISC-V `ET_EXEC`
   files. It intentionally rejects `ET_DYN`; load bias, dynamic relocations, and
   an interpreter are not modeled.
@@ -304,6 +334,31 @@ The CMake library target is `rvemu_core`, with the namespaced alias
   exist. Ignore unknown non-loadable headers and `p_paddr` fields.
 - The flat `Memory` model cannot enforce ELF segment permissions. `PF_X` is
   currently used only to validate the entry point.
+- Successful ELF loads report the envelope from the first nonempty `PT_LOAD`
+  virtual address through the last segment's exclusive end. Runtime placement
+  uses this metadata rather than guessing occupancy from memory contents.
+- `initialize_freestanding_stack` aligns the mapping end down to 16 bytes,
+  rounds the requested size up to 16 bytes, and reserves the range immediately
+  below that top. An image ending exactly at the stack bottom is valid.
+- Stack validation completes before mutation. Success writes only `x2`; it does
+  not alter the PC, other registers, or any memory bytes. A mapping ending at
+  `0x1'0000'0000` intentionally encodes its initial RV32 `sp` as zero.
+- The stack reservation is descriptive in flat memory: there is no guard page
+  or enforcement if guest code moves below its bottom. The current freestanding
+  startup does not write `argc`, `argv`, environment data, or an auxiliary
+  vector.
+- CLI numeric options accept complete unsigned decimal or `0x` hexadecimal
+  forms. Require exactly one ELF path, reject duplicate/zero/overflowing
+  settings, support `--`, and retain a strict positive guest-step limit.
+- CLI defaults are base `0x80000000`, 16 MiB mapped memory, 1 MiB reserved
+  stack, and 50,000,000 guest steps. Normal guest exit returns its low eight
+  bits; help returns 0, syntax errors 2, and infrastructure failures 125.
+- Keep argument parsing, stream output, run orchestration, and reporting in the
+  CLI support library. `main` should remain only the process adapter and final
+  exception boundary.
+- `StreamOutputSink` calls the selected stream buffer once. A positive partial
+  prefix is exact progress; zero or impossible progress is failure and is not
+  retried.
 
 ## Coding conventions
 
@@ -333,11 +388,20 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-To build without tests or downloading GoogleTest:
+To build the CLI without tests or downloading GoogleTest:
 
 ```sh
 cmake -S . -B build -DBUILD_TESTING=OFF
 cmake --build build --parallel
+```
+
+To build only `rvemu::core`:
+
+```sh
+cmake -S . -B build-core \
+  -DBUILD_TESTING=OFF \
+  -DRVEMU_BUILD_CLI=OFF
+cmake --build build-core --parallel
 ```
 
 To compile the ACT smoke runner without tests:
@@ -404,31 +468,38 @@ Completed:
 - Milestone 6b: injected stdout/stderr byte output, Linux RV32 `write`, `exit`,
   and `exit_group`, deterministic error returns, zero-copy checked guest ranges,
   partial/failing sink behavior, and complete write-to-exit session tests.
+- Milestone 6c: occupied ELF address metadata, checked 16-byte freestanding
+  stack placement, a validated CLI, binary-safe host streams, real file
+  execution, guest exit propagation, and failure diagnostics.
 - Milestone 7a: typed self-checking ACT ELF execution, bounded result
   classification, exact ACT summary output, pinned baseline metadata,
   non-privileged halt/linker inputs, a ten-test I/M smoke manifest, and focused
   runner tests. This is plumbing only; no official ACT result is claimed.
+- Milestone 7b: immutable official tool-image pins, validated I/M-oriented UDB
+  and derived Sail inputs, reproducible 47-ELF generation, and a strict
+  compatibility audit that records the current RVC-flag and CSR blockers before
+  emulator execution. No conformance pass is claimed.
 
 Next milestone:
 
-- Add a deliberately minimal 16-byte-aligned stack initializer for freestanding
-  RV32IM/ILP32 programs, then a command-line executable that loads, runs,
-  reports traps, and returns the guest exit status.
-- Validate a minimal non-privileged RV32I/M UDB configuration inside the
-  official ACT environment, pin the container by immutable digest, generate the
-  ten selected self-checking ELFs, compare their signatures with Sail, and add
-  only the small verified smoke set to pull-request CI. Broader generated
-  coverage belongs in scheduled or manual CI.
-- The initial ACT 4 audit used `riscv-arch-test` commit
-  `585fbaf97a7df6e2f0fe8808edd3ad839eb1afe3`, Sail 0.12, and the documented
-  GCC 15/binutils 2.44 toolchain as its reproducibility baseline. Prefer the
-  official container by immutable digest when implementing the harness, and
-  record every pinned input rather than relying on moving tags.
+- Add an interactive debugger loop using the existing `ProgramSession`
+  breakpoint and step boundaries. Begin with breakpoints, single stepping,
+  register inspection, and checked memory inspection; keep command parsing and
+  debugger state outside the architectural core.
+- Remove ACT's spurious RVC flag and CSR-based failure diagnostics at generation
+  time without weakening rvemu's loader or execution target. Then rerun the
+  complete 47-file audit, execute the ten-file smoke subset, and add it to CI
+  only after a verified pass. Broader generated coverage belongs in scheduled
+  or manual CI.
+- The ACT baseline is `riscv-arch-test` commit
+  `585fbaf97a7df6e2f0fe8808edd3ad839eb1afe3` and official image digest
+  `sha256:e2a3982d778cfa5b85502b71dc7cb90891c4119d0b9335f4aa74e71a2206e0e4`.
+  Record every pinned input rather than relying on moving tags.
 - Do not claim full `riscv-arch-test` coverage while CSR, privilege, and trap
   handler state are absent. Keep RVC, floating point, atomics, and other
   unsupported extensions out of the initial test selection.
 - Update both documentation files, validate, commit, and push.
 
-After the concrete runtime, CLI, and initial conformance pass: interactive
-debugging, cache/branch models, reproducible benchmarks, and expanded
-differential testing against Sail, QEMU, or Spike.
+After the debugger foundation and initial conformance pass: cache/branch
+models, reproducible benchmarks, and expanded differential testing against
+Sail, QEMU, or Spike.

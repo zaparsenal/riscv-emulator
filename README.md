@@ -7,10 +7,11 @@ reproducible benchmarks, and differential validation against established
 emulators.
 
 The project is being built in small, tested milestones. It now has a working
-fetch-decode-execute pipeline with complete RV32IM instruction support and a
-validated loader for static 32-bit RISC-V ELF executables. A host-side program
-session and a small Linux-style syscall environment now provide program output
-and termination without changing architectural instruction behavior.
+fetch-decode-execute pipeline with complete RV32IM instruction support, a
+validated loader for static 32-bit RISC-V ELF executables, and a runnable
+`rvemu` command-line frontend. A host-side program session and a small
+Linux-style syscall environment provide program output and termination without
+changing architectural instruction behavior.
 
 ## Current status
 
@@ -56,6 +57,8 @@ milestones are complete:
 - atomic load failures that preserve memory and the program counter
 - typed ELF load results with stable error categories and optional failing
   program-header indexes
+- successful ELF-load metadata describing the complete occupied address
+  envelope for later runtime placement
 - a `ProgramSession` wrapper that captures user environment calls using the
   RV32 Linux register convention (`a7` plus `a0`-`a5`)
 - injectable environment-call handling that can resume execution, terminate a
@@ -66,6 +69,12 @@ milestones are complete:
 - injectable stdout/stderr byte output through Linux RV32 `write` (64)
 - deterministic termination through `exit` (93) and `exit_group` (94)
 - Linux-style `-EBADF`, `-EFAULT`, `-EIO`, and `-ENOSYS` syscall results
+- a minimal freestanding stack reservation at the top of mapped memory, with a
+  16-byte-aligned initial `sp` and checked separation from the loaded image
+- a production-facing `rvemu` executable with validated memory, stack, and
+  strict guest-step-limit options
+- end-to-end ELF execution with binary-safe stdout/stderr routing, guest exit
+  status propagation, and precise loader, stack, limit, and trap diagnostics
 - a typed `rvemu-act-smoke` runner for already-generated, self-checking ACT 4
   RV32I/M ELF files
 - pinned ACT 4 inputs, a non-privileged halt ABI, linker script, and a ten-test
@@ -79,18 +88,20 @@ milestones are complete:
   alignment and ordering, entry-point validation, transactional loading,
   environment-call transitions, session limits, breakpoints, syscall routing,
   invalid guest output ranges, partial writes, sink failures, exit statuses,
+  stack placement and nonmutation, command-line parsing, hosted ELF execution,
   ACT runner pass/fail and infrastructure classifications
 - optional AddressSanitizer and UndefinedBehaviorSanitizer instrumentation
 - GitHub Actions validation with GCC and Clang
 
-RV32IM execution, static ELF32 loading, the shared program session, and the
-minimal output/termination syscall layer are complete. There is currently no
-initialized process stack, command-line executable, interactive debugger,
-performance model, or published benchmark result.
+RV32IM execution, static ELF32 loading, the shared program session, minimal
+output/termination syscalls, freestanding stack setup, and the command-line
+runner are complete. There is currently no full process-startup stack,
+interactive debugger, performance model, or published benchmark result.
 
-The ACT 4 smoke runner foundation is also present, but no official ACT result
-is claimed: compatible official ELFs have not yet been generated or executed in
-the pinned reference environment.
+The ACT 4 smoke runner and reproducible generation/audit harness are also
+present, but no official ACT result is claimed. The pinned environment generated
+the selected ELFs successfully; a compatibility audit correctly blocked their
+execution because ACT emitted unsupported metadata and CSR diagnostics.
 
 ## Supported instructions
 
@@ -125,7 +136,8 @@ privileged instructions are outside the current scope.
 
 ## Architecture
 
-The implementation currently builds one reusable library, `rvemu::core`:
+The implementation builds a reusable library, `rvemu::core`, and the `rvemu`
+command-line executable:
 
 - `CpuState` owns the 32 general-purpose registers and program counter. Its API
   prevents direct mutation of the register array and ignores all writes to
@@ -149,7 +161,13 @@ The implementation currently builds one reusable library, `rvemu::core`:
 - `load_elf32` and `load_elf32_file` validate a complete executable before
   loading its segments into `Memory` and setting the entry-point PC. Failures
   return an `ElfLoadFailure`; successful loads report the segment and byte
-  counts they actually loaded.
+  counts they actually loaded plus the occupied address envelope.
+- `initialize_freestanding_stack` reserves a configurable range at the top of
+  mapped memory, rejects overlap with the loaded image, and writes only the
+  16-byte-aligned initial stack pointer in `x2`.
+- The CLI support layer owns pure argument parsing, standard-stream output,
+  load/stack/session orchestration, and diagnostics. The small `main` function
+  supplies process streams and maps normal guest exit to the host exit status.
 
 Execution computes pending effects before committing them. A misaligned taken
 jump or branch therefore traps at the control-transfer instruction without
@@ -251,6 +269,39 @@ The implementation follows the
 [RISC-V ELF psABI](https://riscv-non-isa.github.io/riscv-elf-psabi-doc/#elf-object-files)
 specifications.
 
+## Command-line execution
+
+A normal build creates `build/rvemu`. It accepts one static RV32IM ELF file and
+the following options; byte counts and addresses may be decimal or prefixed
+hexadecimal values:
+
+```text
+usage: rvemu [options] <program.elf>
+
+  --memory-base ADDRESS  guest mapping base (default 0x80000000)
+  --memory-size BYTES    guest mapping size (default 16777216)
+  --stack-size BYTES     reserved stack size (default 1048576)
+  --max-steps COUNT      strict guest-step limit (default 50000000)
+  -h, --help             show help
+```
+
+For example:
+
+```sh
+build/rvemu --max-steps 1000000 path/to/program.elf
+```
+
+The mapping must contain every nonempty `PT_LOAD` segment and leave room above
+the image for the requested stack. The runner aligns `sp` down to a 16-byte
+boundary and reserves the stack below it. This is intentionally a freestanding
+startup contract: it does not yet place `argc`, `argv`, environment strings, or
+an auxiliary vector on the stack.
+
+Normal termination returns the guest's low-eight-bit exit status. Help returns
+0, command-line syntax errors return 2, and host-side loader, stack, execution,
+or internal failures return 125 with a diagnostic. Because guest statuses are
+preserved, a normally exiting guest may also legitimately return 2 or 125.
+
 ## ACT 4 smoke runner
 
 `rvemu-act-smoke` is a deliberately narrow bridge for already-generated ACT 4
@@ -261,27 +312,28 @@ a nonzero status is a test failure. Loader errors, traps, unknown environment
 calls, unexpected breakpoints, and step-limit exhaustion are infrastructure
 failures, not architectural test failures.
 
-The reproducibility inputs under `conformance/act4/` pin
-`riscv-arch-test` commit
-`585fbaf97a7df6e2f0fe8808edd3ad839eb1afe3`, Sail 0.12, GCC 15, binutils
-2.44, the target memory map, linker script, halt macros, exclusions, and ten
-representative I/M test paths. This is runner plumbing and a planned smoke
-selection—not certification and not evidence that those ten official tests
-currently pass.
+The reproducibility inputs under `conformance/act4/` pin `riscv-arch-test`
+commit `585fbaf97a7df6e2f0fe8808edd3ad839eb1afe3` and the official multi-arch
+ACT image by immutable digest. The observed image contains Sail 0.12, GCC
+16.1.0, binutils 2.46, and UDB 0.1.13. The directory also records the target
+memory map, derived Sail configuration, linker script, halt macros, exclusions,
+and ten representative I/M smoke paths.
 
-Official generation is still blocked locally because the RISC-V GCC toolchain,
-Sail, `mise`, and `uv` are unavailable. More importantly, the upstream standard
-Sail UDB configuration emits privileged CSR setup and cleanup that this RV32IM
-core intentionally does not support. The next conformance step is to validate a
-minimal I/M-only UDB configuration inside an official container pinned by
-immutable digest, generate the selected ELFs, compare against Sail, and only
-then record results. See `conformance/act4/README.md` for the exact boundary.
+The pinned environment successfully generated all 47 selected non-privileged
+RV32I/M ELFs from Sail results (188 build tasks succeeded). The compatibility
+audit then stopped before emulator execution: all 47 files carry the RVC ELF
+flag despite containing no 16-bit instructions, and ACT's failure-diagnostic
+path places three unsupported CSR reads in every file—141 CSR instructions in
+total. The harness does not rewrite those files, relax the loader, or claim a
+pass. See `conformance/act4/README.md` for the reproduction command, immutable
+pins, audit evidence, and exact boundary.
 
 ## Repository layout
 
 ```text
 .
 ├── .github/workflows/ci.yml  # GCC/Clang sanitizer CI
+├── app/                      # CLI support and executable entry point
 ├── cmake/                    # Shared compiler and sanitizer options
 ├── conformance/act4/         # Pinned ACT 4 smoke inputs and limitations
 ├── include/rvemu/            # Public C++ interfaces
@@ -315,8 +367,9 @@ ctest --test-dir build --output-on-failure
 ```
 
 For a normal build, omit `-DRVEMU_ENABLE_SANITIZERS=ON`. Set
-`-DBUILD_TESTING=OFF` to build only the core library and avoid downloading test
-dependencies.
+`-DBUILD_TESTING=OFF` to avoid downloading test dependencies while still
+building `rvemu`. To build only the reusable core library, also set
+`-DRVEMU_BUILD_CLI=OFF`.
 
 The ACT smoke executable is built as `build/rvemu-act-smoke` whenever tests are
 enabled. To build it without tests, opt in explicitly:
@@ -387,12 +440,13 @@ does not reset registers or clear unrelated memory.
 4. **Complete:** all RV32M multiplication, division, and remainder operations,
    including architectural zero-divisor and signed-overflow behavior.
 5. **Complete:** load validated, static 32-bit little-endian RISC-V ELF files.
-6. **In progress:** the shared program-session contract, host breakpoints,
-   accounting, and Linux-style output/termination syscalls are complete; next
-   add stack initialization and a minimal executable.
-7. **In progress:** the non-privileged ACT 4 runner, pins, halt macros, linker,
-   and smoke manifest are complete; next validate an I/M-only UDB configuration
-   in an immutable official container and run the generated tests against Sail.
+6. **Complete:** the shared program-session contract, host breakpoints,
+   accounting, Linux-style output/termination syscalls, freestanding stack
+   setup, and command-line executable are complete.
+7. **In progress:** the ACT 4 runner, immutable tool pins, I/M-oriented UDB and
+   Sail configuration, generation harness, and compatibility audit are
+   complete. All 47 selected ELFs generate, but execution is correctly blocked
+   by spurious RVC flags and CSR-based ACT failure diagnostics.
 8. Add an interactive debugger with stepping and state inspection, building on
    the existing host-breakpoint mechanism.
 9. Add configurable cache and branch-prediction models.
@@ -422,15 +476,20 @@ does not reset registers or clear unrelated memory.
   ELF flags can therefore contain an unsupported extension; execution will
   still trap if it reaches an unsupported instruction.
 - ELF `PF_R`, `PF_W`, and `PF_X` permissions are not enforced by flat memory.
-- The loader is available through the C++ library, but there is no command-line
-  frontend yet.
-- There is no initialized user stack, argument vector, environment, or auxiliary
-  vector yet.
+- The CLI creates only a freestanding 16-byte-aligned stack pointer. It does not
+  build a Linux process-startup image containing `argc`, `argv`, environment
+  strings, or an auxiliary vector, and the flat memory model does not enforce
+  stack underflow below the reserved range.
+- The CLI accepts no guest arguments yet. Its default contiguous mapping is 16
+  MiB at `0x80000000`; programs linked elsewhere must select matching memory
+  options.
 - Hosted output supports only stdout and stderr. There is no guest stdin, file
   table, signal model, or broader Linux syscall emulation; all sink failures map
   to `-EIO` because `SIGPIPE` and richer host error translation are absent.
 - Host breakpoints are supported for bounded session runs, but there is no
   interactive debugger or register/memory command interface yet.
-- The ACT 4 runner is integrated and unit-tested, but no official generated ACT
-  ELF has been run. No architectural conformance result is published yet.
+- ACT generated all 47 selected non-privileged RV32I/M ELFs, but the audit
+  correctly blocks execution because every file is RVC-flagged and contains
+  three CSR reads in its failure path. No architectural conformance result is
+  published yet.
 - There are no performance claims or results yet.

@@ -64,10 +64,11 @@ def audit_elf(path: Path, objdump: str, readelf: str) -> dict[str, object]:
         if len(encoding) != 8:
             non_32_bit.append(line.strip())
             continue
-        if mnemonic.startswith("."):
-            continue
 
         decoded_count += 1
+        if mnemonic.startswith("."):
+            unsupported.append(line.strip())
+            continue
         word = int(encoding, 16)
         opcode = word & 0x7F
         if opcode not in RV32IM_OPCODES:

@@ -7,12 +7,13 @@ reproducible benchmarks, and differential validation against established
 emulators.
 
 The project is being built in small, tested milestones. It now has a working
-fetch-decode-execute pipeline with complete RV32IM instruction support.
+fetch-decode-execute pipeline with complete RV32IM instruction support and a
+validated loader for static 32-bit RISC-V ELF executables.
 
 ## Current status
 
-The foundational state, memory, execution-loop, RV32I, and RV32M milestones are
-complete:
+The foundational state, memory, execution-loop, RV32I, RV32M, and ELF-loading
+milestones are complete:
 
 - 32 unsigned 32-bit integer registers
 - an enforced `x0 == 0` invariant
@@ -43,18 +44,28 @@ complete:
   model, including forward-compatible handling of reserved fence fields
 - precise, non-retiring `ECALL` and `EBREAK` traps
 - bounded execution of loops through the existing instruction-limit API
+- loading from either an in-memory byte span or an ELF file path
+- explicit parsing of fixed-address, 32-bit, little-endian RISC-V executables
+- complete prevalidation of ELF and program headers before architectural state
+  changes
+- loading of nonoverlapping `PT_LOAD` segments by virtual address, including
+  zero-filled memory tails
+- atomic load failures that preserve memory and the program counter
+- typed ELF load results with stable error categories and optional failing
+  program-header indexes
 - GoogleTest coverage for state, memory, instruction formats, fetch, execution,
   signed boundaries, shift limits, operand aliasing, PC-relative wraparound,
   taken and untaken branches, load extension, little-endian stores, effective
   address wraparound, misaligned targets and data, instruction limits, illegal
   instructions, access faults, high-word multiplication, division by zero, and
-  signed division overflow
+  signed division overflow, ELF range arithmetic, malformed headers, segment
+  alignment and ordering, entry-point validation, and transactional loading
 - optional AddressSanitizer and UndefinedBehaviorSanitizer instrumentation
 - GitHub Actions validation with GCC and Clang
 
-RV32IM execution is complete. There is currently no command-line executable,
-ELF loader, system-call layer, debugger, performance model, or published
-benchmark result.
+RV32IM execution and static ELF32 loading are complete. There is currently no
+command-line executable, system-call layer, debugger, performance model, or
+published benchmark result.
 
 ## Supported instructions
 
@@ -100,6 +111,10 @@ The implementation currently builds one reusable library, `rvemu::core`:
   decodes, and executes one instruction. `run(limit)` executes until its strict
   instruction limit or the first trap. Both APIs return variants, so successful
   execution cannot be confused with a trap.
+- `load_elf32` and `load_elf32_file` validate a complete executable before
+  loading its segments into `Memory` and setting the entry-point PC. Failures
+  return an `ElfLoadFailure`; successful loads report the segment and byte
+  counts they actually loaded.
 
 Execution computes pending effects before committing them. A misaligned taken
 jump or branch therefore traps at the control-transfer instruction without
@@ -139,8 +154,37 @@ Signed comparisons use sign-bit-biased unsigned ordering, and arithmetic right
 shift explicitly constructs the sign-fill bits. This keeps RV32I behavior
 independent of the host compiler's signed-shift and overflow choices.
 
-Keeping CPU state, memory, decoding, and execution independently testable gives
-later ELF loading, debugging, and performance models clear integration points.
+Keeping CPU state, memory, decoding, execution, and ELF loading independently
+testable gives later syscall, debugging, and performance features clear
+integration points.
+
+## ELF loading
+
+The loader accepts static `ET_EXEC` files that use the standard 32-bit,
+little-endian RISC-V ELF layout, the System V/unspecified OS ABI, soft-float ABI
+flags, and four-byte instruction alignment. It reads every multi-byte field
+explicitly in little-endian order rather than mapping host C++ structures over
+untrusted file bytes.
+
+Before changing memory, the loader validates the full program-header table and
+every loadable segment using widened range arithmetic. It then copies each
+`PT_LOAD` file image to `p_vaddr`, zero-fills the remaining `p_memsz` bytes, and
+sets the PC to an aligned entry point inside an executable segment. `p_paddr`
+is intentionally ignored, as required for System V application executables.
+Bytes outside loadable segments and all integer registers are preserved.
+
+This first loader deliberately rejects position-independent `ET_DYN` files,
+dynamic-linker/interpreter segments, thread-local storage, compressed or
+hard-float ABI flags, overlapping load segments, and extended program-header
+numbering. These cases need runtime features or policies that the emulator does
+not yet model. ELF segment permissions are inspected for entry-point validation
+but are not enforced by the current flat `Memory` type.
+
+The implementation follows the
+[generic ELF header](https://gabi.xinuos.com/elf/02-eheader.html),
+[generic ELF program-loading](https://gabi.xinuos.com/elf/07-pheader.html), and
+[RISC-V ELF psABI](https://riscv-non-isa.github.io/riscv-elf-psabi-doc/#elf-object-files)
+specifications.
 
 ## Repository layout
 
@@ -188,6 +232,7 @@ The public headers can be used from another CMake target after linking
 
 ```cpp
 #include <rvemu/cpu_state.hpp>
+#include <rvemu/elf_loader.hpp>
 #include <rvemu/execution_engine.hpp>
 #include <rvemu/memory.hpp>
 
@@ -206,6 +251,22 @@ Callers can inspect `StepResult` as either `StepCompleted` or `Trap`. A bounded
 `run(instruction_limit)` call returns either `InstructionLimitReached` or
 `RunTrapped` and reports the number of successfully retired instructions.
 
+Load a statically linked ELF file before constructing the execution engine:
+
+```cpp
+rvemu::CpuState cpu;
+rvemu::Memory memory(0x80000000U, 16U * 1024U * 1024U);
+
+const rvemu::ElfLoadResult loaded =
+    rvemu::load_elf32_file("program.elf", cpu, memory);
+if (const auto* failure = std::get_if<rvemu::ElfLoadFailure>(&loaded)) {
+  // Log rvemu::elf_load_error_message(failure->code).
+}
+```
+
+The memory mapping must already cover every nonempty loadable segment. Loading
+does not reset registers or clear unrelated memory.
+
 ## Roadmap
 
 1. **Complete:** C++20/CMake scaffolding, CPU state, checked little-endian
@@ -216,8 +277,8 @@ Callers can inspect `StepResult` as either `StepCompleted` or `Trap`. A bounded
    and deterministic handling of reserved encodings.
 4. **Complete:** all RV32M multiplication, division, and remainder operations,
    including architectural zero-divisor and signed-overflow behavior.
-5. **Next:** load validated 32-bit little-endian RISC-V ELF files.
-6. Add a minimal system-call environment for output and termination.
+5. **Complete:** load validated, static 32-bit little-endian RISC-V ELF files.
+6. **Next:** add a minimal system-call environment for output and termination.
 7. Add an interactive debugger with stepping, breakpoints, and state inspection.
 8. Add configurable cache and branch-prediction models.
 9. Add reproducible workloads and report only measured benchmark results.
@@ -237,4 +298,13 @@ Callers can inspect `StepResult` as either `StepCompleted` or `Trap`. A bounded
   the host caller.
 - There is no privilege-mode state. `ECALL` is currently classified as a
   user-mode environment call for the future user-level syscall layer.
+- ELF loading currently supports only fixed-address `ET_EXEC` files with
+  `e_flags == 0`, System V/unspecified OS ABI version 0, sorted and
+  nonoverlapping `PT_LOAD` ranges, and no dynamic-linking or TLS segments.
+- ELF section headers and `.riscv.attributes` are not parsed. A file with zero
+  ELF flags can therefore contain an unsupported extension; execution will
+  still trap if it reaches an unsupported instruction.
+- ELF `PF_R`, `PF_W`, and `PF_X` permissions are not enforced by flat memory.
+- The loader is available through the C++ library, but there is no command-line
+  frontend yet.
 - There are no performance claims or results yet.

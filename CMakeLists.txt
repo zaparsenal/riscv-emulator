@@ -12,6 +12,7 @@ include(cmake/ProjectOptions.cmake)
 
 add_library(rvemu_core
   src/cpu_state.cpp
+  src/elf_loader.cpp
   src/execution_engine.cpp
   src/instruction.cpp
   src/memory.cpp

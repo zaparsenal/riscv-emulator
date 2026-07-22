@@ -13,8 +13,8 @@ Correctness takes priority over optimization.
 
 ## Current state
 
-Milestones 1 through 4 are complete, including the full RV32IM instruction set.
-The repository has:
+Milestones 1 through 5 are complete, including the full RV32IM instruction set
+and static ELF32 loading. The repository has:
 
 - C++20/CMake project scaffolding
 - a reusable `rvemu::core` library
@@ -46,23 +46,33 @@ The repository has:
 - conservative single-hart `FENCE` execution and precise, non-retiring
   breakpoint and user-environment-call traps
 - host-independent full-width RV32M products and signed division behavior
+- `load_elf32` for validated in-memory ELF images and `load_elf32_file` for
+  loading a real file through the same parser
+- explicit little-endian parsing of static ELF32 RISC-V `ET_EXEC` headers and
+  program headers without casting untrusted bytes to host structures
+- complete prevalidation, virtual-address `PT_LOAD` copying, memory-tail zero
+  fill, executable entry-point initialization, and all-or-nothing failure
+- typed ELF load failures covering format, compatibility, bounds, alignment,
+  ordering, overlap, entry point, and file-I/O problems
 - GoogleTest unit tests
 - optional AddressSanitizer and UndefinedBehaviorSanitizer support
 - GCC and Clang GitHub Actions CI
 - a pinned GoogleTest source dependency by default, avoiding host-package ABI
   mismatches; `RVEMU_USE_SYSTEM_GTEST=ON` is an explicit opt-in
 
-RV32IM is complete. There is no executable, ELF loader, syscall layer, debugger,
-performance model, or benchmark suite yet.
+RV32IM and the static ELF loader are complete. There is no command-line
+executable, syscall layer, debugger, performance model, or benchmark suite yet.
 
 ## Architecture and directory structure
 
 ```text
 include/rvemu/cpu_state.hpp  Public CPU-state API
+include/rvemu/elf_loader.hpp Public ELF load results and file/span loader APIs
 include/rvemu/instruction.hpp Public decoded-instruction types and decoder
 include/rvemu/execution_engine.hpp Public trap, result, and execution-loop API
 include/rvemu/memory.hpp     Public checked-memory API and error types
 src/cpu_state.cpp            CPU-state implementation
+src/elf_loader.cpp           ELF32 parsing, validation, and transactional load
 src/instruction.cpp          Format decoding and immediate reconstruction
 src/execution_engine.cpp     Fetch, current ISA execution, step, and bounded run
 src/memory.cpp               Little-endian memory implementation
@@ -170,6 +180,35 @@ The CMake library target is `rvemu_core`, with the namespaced alias
   `IllegalInstruction` until implemented.
 - `run()` always takes a strict instruction limit. This makes tests deterministic
   and prevents an accidental unbounded host loop.
+- The ELF loader supports fixed-address, 32-bit, little-endian RISC-V `ET_EXEC`
+  files. It intentionally rejects `ET_DYN`; load bias, dynamic relocations, and
+  an interpreter are not modeled.
+- Parse ELF fields with explicit little-endian byte assembly. Never cast a file
+  buffer to `Elf32_Ehdr` or `Elf32_Phdr`, because alignment, host endianness,
+  structure layout, and untrusted bounds must not influence correctness.
+- Require ELF class 32, little-endian encoding, current identification and file
+  versions, `EM_RISCV`, exact ELF32 header sizes, System V/unspecified OS ABI
+  version 0, and `e_flags == 0`. The flags policy excludes RVC, hard-float ABI,
+  RVE, TSO, RV64ILP32, RVY, reserved, and non-standard modes that current RV32IM
+  execution cannot promise to support.
+- `e_flags == 0` does not fully identify the required ISA. Additional extension
+  requirements can live in `.riscv.attributes`; until those are parsed,
+  unsupported instructions still fail precisely during execution.
+- Validate the complete program-header table and every relevant segment before
+  modifying `Memory` or the PC. Range checks use widened unsigned arithmetic so
+  file offsets and 32-bit guest addresses cannot wrap.
+- Load `PT_LOAD` bytes at `p_vaddr`, never `p_paddr`, and zero-fill
+  `p_memsz - p_filesz`. Preserve registers and bytes outside segment ranges.
+- Enforce the generic ABI's ascending `p_vaddr` order and alignment congruence.
+  Reject intersecting nonempty destination ranges as a conservative platform
+  policy because the generic ABI defines no byte-level overlap precedence.
+- Require a four-byte-aligned entry point inside a nonempty executable
+  `PT_LOAD`. This is an emulator platform policy derived from RV32IM's current
+  `IALIGN=32`, not a generic ELF structural rule.
+- Reject `PT_INTERP`, `PT_DYNAMIC`, and `PT_TLS` until their runtime facilities
+  exist. Ignore unknown non-loadable headers and `p_paddr` fields.
+- The flat `Memory` model cannot enforce ELF segment permissions. `PF_X` is
+  currently used only to validate the entry point.
 
 ## Coding conventions
 
@@ -251,18 +290,23 @@ Completed:
 - Milestone 4: all eight RV32M operations with full-width multiplication,
   host-independent signed arithmetic, defined zero-divisor/overflow behavior,
   aliasing, `x0`, and strict-encoding tests. RV32IM is complete.
+- Milestone 5: static ELF32 loading from spans or files with explicit
+  little-endian parsing, strict RISC-V compatibility checks, widened range
+  validation, `PT_LOAD` copy/zero-fill behavior, entry-point setup, typed
+  failures, transactional state guarantees, and execution integration tests.
 
 Next milestone:
 
-- Add a validated ELF32 loader for little-endian RISC-V executables.
-- Parse headers and program headers with explicit little-endian reads rather
-  than casting file bytes to host ABI structures.
-- Load `PT_LOAD` segments, zero-fill `p_memsz - p_filesz`, initialize the PC
-  from the entry point, and reject truncated, malformed, wrong-architecture, or
-  address-overflowing files without partial state changes.
-- Add focused synthetic ELF fixtures and, where a cross-compiler is available,
-  a minimal real RISC-V executable fixture.
+- Add a small user-level syscall environment that consumes precise `ECALL`
+  traps without changing core instruction semantics.
+- Begin with deterministic program termination and byte/string output through
+  an injectable host-I/O interface so tests do not depend on process-global
+  stdout.
+- Define supported syscall numbers and register conventions explicitly, test
+  invalid guest pointers and unsupported calls, and preserve precise state on
+  failures.
+- Add a minimal executable frontend once programs can produce output and exit.
 - Update both documentation files, validate, commit, and push.
 
-After ELF loading: syscalls, interactive debugging, cache/branch models,
+After syscalls and a frontend: interactive debugging, cache/branch models,
 reproducible benchmarks, and differential testing.

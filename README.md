@@ -7,11 +7,11 @@ reproducible benchmarks, and differential validation against established
 emulators.
 
 The project is being built in small, tested milestones. It now has a working
-fetch-decode-execute pipeline with complete base RV32I instruction support.
+fetch-decode-execute pipeline with complete RV32IM instruction support.
 
 ## Current status
 
-The foundational state, memory, execution-loop, and RV32I milestones are
+The foundational state, memory, execution-loop, RV32I, and RV32M milestones are
 complete:
 
 - 32 unsigned 32-bit integer registers
@@ -29,7 +29,10 @@ complete:
 - typed step and bounded-run results using architectural instruction trap causes
 - execution of RV32I upper-immediate, integer-immediate, register-register ALU,
   jump, conditional-branch, load, store, memory-ordering, and environment groups
+- execution of all RV32M low/high multiplication, division, and remainder
+  operations
 - host-independent signed comparisons and arithmetic right shifts
+- host-independent signed products, quotient rounding, and remainder signs
 - five-bit masking of register-provided shift counts
 - strict rejection of reserved ALU encodings without state changes
 - precise control-flow traps with atomic PC/link-register effects
@@ -44,13 +47,14 @@ complete:
   signed boundaries, shift limits, operand aliasing, PC-relative wraparound,
   taken and untaken branches, load extension, little-endian stores, effective
   address wraparound, misaligned targets and data, instruction limits, illegal
-  instructions, and access faults
+  instructions, access faults, high-word multiplication, division by zero, and
+  signed division overflow
 - optional AddressSanitizer and UndefinedBehaviorSanitizer instrumentation
 - GitHub Actions validation with GCC and Clang
 
-RV32I is complete, and RV32M has not started. There is currently no command-line
-executable, ELF loader, system-call layer, debugger, performance model, or
-published benchmark result.
+RV32IM execution is complete. There is currently no command-line executable,
+ELF loader, system-call layer, debugger, performance model, or published
+benchmark result.
 
 ## Supported instructions
 
@@ -59,6 +63,7 @@ published benchmark result.
 | Upper immediate | `LUI`, `AUIPC` |
 | Integer immediate | `ADDI`, `SLTI`, `SLTIU`, `XORI`, `ORI`, `ANDI`, `SLLI`, `SRLI`, `SRAI` |
 | Register-register ALU | `ADD`, `SUB`, `SLL`, `SLT`, `SLTU`, `XOR`, `SRL`, `SRA`, `OR`, `AND` |
+| Integer multiply/divide | `MUL`, `MULH`, `MULHSU`, `MULHU`, `DIV`, `DIVU`, `REM`, `REMU` |
 | Jumps | `JAL`, `JALR` |
 | Conditional branches | `BEQ`, `BNE`, `BLT`, `BGE`, `BLTU`, `BGEU` |
 | Loads | `LB`, `LH`, `LW`, `LBU`, `LHU` |
@@ -67,13 +72,15 @@ published benchmark result.
 | Environment | `ECALL`, `EBREAK` |
 
 Instruction behavior follows the
-[RV32I Base Integer Instruction Set, version 2.1](https://docs.riscv.org/reference/isa/v20260120/unpriv/rv32.html).
+[RV32I Base Integer Instruction Set, version 2.1](https://docs.riscv.org/reference/isa/v20260120/unpriv/rv32.html)
+and the
+[M Extension for Integer Multiplication and Division, version 2.0](https://docs.riscv.org/reference/isa/v20260120/unpriv/m-st-ext.html).
 Where the specification leaves reserved encodings unspecified, this emulator
 chooses a deterministic `IllegalInstruction` trap.
 
 Instructions outside the support table currently return an `IllegalInstruction`
 trap. They belong to unsupported extensions, privileged execution, or reserved
-encoding space rather than the base RV32I target.
+encoding space rather than the supported RV32IM target.
 
 ## Architecture
 
@@ -119,6 +126,14 @@ PC, mutate registers, or count as retired instructions. Until privilege modes
 are modeled, `ECALL` is reported as `EnvironmentCallFromUserMode`; the later
 system-call environment will consume that trap rather than changing instruction
 semantics.
+
+RV32M signed operations use unsigned sign-and-magnitude intermediates rather
+than host signed casts. Multiplication constructs the full 64-bit product before
+selecting its low or high word. Signed division divides unsigned magnitudes and
+then reapplies the architectural signs, which provides round-toward-zero
+quotients without host overflow. Division by zero does not trap: quotients are
+all ones and remainders equal the dividend. The `INT32_MIN / -1` overflow case
+returns `INT32_MIN` with remainder zero.
 
 Signed comparisons use sign-bit-biased unsigned ordering, and arithmetic right
 shift explicitly constructs the sign-fill bits. This keeps RV32I behavior
@@ -199,8 +214,9 @@ Callers can inspect `StepResult` as either `StepCompleted` or `Trap`. A bounded
    aligned fetch, typed traps, and bounded step/run execution.
 3. **Complete:** all base RV32I instruction families, including precise traps
    and deterministic handling of reserved encodings.
-4. **Next:** implement and exhaustively test the RV32M extension.
-5. Load validated 32-bit little-endian RISC-V ELF files.
+4. **Complete:** all RV32M multiplication, division, and remainder operations,
+   including architectural zero-divisor and signed-overflow behavior.
+5. **Next:** load validated 32-bit little-endian RISC-V ELF files.
 6. Add a minimal system-call environment for output and termination.
 7. Add an interactive debugger with stepping, breakpoints, and state inspection.
 8. Add configurable cache and branch-prediction models.
@@ -211,8 +227,6 @@ Callers can inspect `StepResult` as either `StepCompleted` or `Trap`. A bounded
 
 - Memory is one contiguous mapped region, not yet a sparse address map or bus.
 - Misaligned halfword and word accesses always fail; no emulation mode exists.
-- RV32M is not implemented; its encodings currently produce an
-  `IllegalInstruction` trap.
 - `Zicsr`, `Zifencei`, privileged instructions, and other extensions are not
   implemented. Their encodings produce an `IllegalInstruction` trap.
 - Decoding currently validates the major opcode and reconstructs its format;

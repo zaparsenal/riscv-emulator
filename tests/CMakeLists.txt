@@ -29,6 +29,7 @@ add_executable(rvemu_tests
   instruction_test.cpp
   memory_test.cpp
   memory_instructions_test.cpp
+  m_extension_instructions_test.cpp
   register_instructions_test.cpp
   system_instructions_test.cpp
 )

@@ -242,25 +242,5 @@ TEST(RegisterInstructionStandaloneTest,
   }
 }
 
-TEST(RegisterInstructionStandaloneTest,
-     Rv32mEncodingRemainsIllegalUntilExtensionIsImplemented) {
-  CpuState state;
-  Memory memory(kBaseAddress, 4U);
-  state.set_program_counter(kBaseAddress);
-  state.write_register(1U, 6U);
-  state.write_register(2U, 7U);
-  constexpr std::uint32_t multiply =
-      encode_register_operation(3U, 0U, 1U, 2U, 0x01U);
-  memory.write32(kBaseAddress, multiply);
-  ExecutionEngine engine(state, memory);
-
-  const StepResult result = engine.step();
-
-  ASSERT_TRUE(std::holds_alternative<Trap>(result));
-  EXPECT_EQ(std::get<Trap>(result).cause, TrapCause::IllegalInstruction);
-  EXPECT_EQ(state.read_register(3U), 0U);
-  EXPECT_EQ(state.program_counter(), kBaseAddress);
-}
-
 }  // namespace
 }  // namespace rvemu

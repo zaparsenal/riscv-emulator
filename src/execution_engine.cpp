@@ -65,9 +65,102 @@ constexpr std::uint32_t kEbreakInstruction = 0x00100073U;
   }
 }
 
+[[nodiscard]] constexpr bool is_negative_word(
+    const std::uint32_t value) noexcept {
+  return (value & 0x80000000U) != 0U;
+}
+
+[[nodiscard]] constexpr std::uint32_t signed_magnitude(
+    const std::uint32_t value) noexcept {
+  return is_negative_word(value) ? 0U - value : value;
+}
+
+[[nodiscard]] constexpr std::uint32_t apply_sign(
+    const std::uint32_t magnitude, const bool negative) noexcept {
+  return negative ? 0U - magnitude : magnitude;
+}
+
+[[nodiscard]] constexpr std::uint64_t signed_product_bits(
+    const std::uint32_t source1, const std::uint32_t source2,
+    const bool source2_is_signed) noexcept {
+  const bool source1_negative = is_negative_word(source1);
+  const bool source2_negative =
+      source2_is_signed && is_negative_word(source2);
+  const std::uint64_t source2_magnitude =
+      source2_is_signed ? signed_magnitude(source2) : source2;
+  const std::uint64_t magnitude =
+      static_cast<std::uint64_t>(signed_magnitude(source1)) *
+      source2_magnitude;
+  return source1_negative != source2_negative
+             ? std::uint64_t{0U} - magnitude
+             : magnitude;
+}
+
+struct SignedDivisionResult {
+  std::uint32_t quotient;
+  std::uint32_t remainder;
+};
+
+[[nodiscard]] constexpr SignedDivisionResult signed_divide(
+    const std::uint32_t dividend, const std::uint32_t divisor) noexcept {
+  if (divisor == 0U) {
+    return SignedDivisionResult{0xFFFFFFFFU, dividend};
+  }
+
+  const bool dividend_negative = is_negative_word(dividend);
+  const bool divisor_negative = is_negative_word(divisor);
+  const std::uint32_t dividend_magnitude = signed_magnitude(dividend);
+  const std::uint32_t divisor_magnitude = signed_magnitude(divisor);
+  const std::uint32_t quotient_magnitude =
+      dividend_magnitude / divisor_magnitude;
+  const std::uint32_t remainder_magnitude =
+      dividend_magnitude % divisor_magnitude;
+  return SignedDivisionResult{
+      apply_sign(quotient_magnitude,
+                 dividend_negative != divisor_negative),
+      apply_sign(remainder_magnitude, dividend_negative)};
+}
+
+[[nodiscard]] constexpr std::optional<std::uint32_t> execute_m_extension(
+    const DecodedInstruction& instruction, const std::uint32_t source1,
+    const std::uint32_t source2) noexcept {
+  if (instruction.function7 != 0x01U) {
+    return std::nullopt;
+  }
+
+  const std::uint64_t unsigned_product =
+      static_cast<std::uint64_t>(source1) * source2;
+  switch (instruction.function3) {
+    case 0x0U:  // MUL
+      return static_cast<std::uint32_t>(unsigned_product);
+    case 0x1U:  // MULH
+      return static_cast<std::uint32_t>(
+          signed_product_bits(source1, source2, true) >> 32U);
+    case 0x2U:  // MULHSU
+      return static_cast<std::uint32_t>(
+          signed_product_bits(source1, source2, false) >> 32U);
+    case 0x3U:  // MULHU
+      return static_cast<std::uint32_t>(unsigned_product >> 32U);
+    case 0x4U:  // DIV
+      return signed_divide(source1, source2).quotient;
+    case 0x5U:  // DIVU
+      return source2 == 0U ? 0xFFFFFFFFU : source1 / source2;
+    case 0x6U:  // REM
+      return signed_divide(source1, source2).remainder;
+    case 0x7U:  // REMU
+      return source2 == 0U ? source1 : source1 % source2;
+    default:
+      return std::nullopt;
+  }
+}
+
 [[nodiscard]] std::optional<std::uint32_t> execute_op(
     const DecodedInstruction& instruction, const std::uint32_t source1,
     const std::uint32_t source2) noexcept {
+  if (instruction.function7 == 0x01U) {
+    return execute_m_extension(instruction, source1, source2);
+  }
+
   const std::uint32_t shift_amount = source2 & 0x1FU;
 
   switch (instruction.function3) {

@@ -13,8 +13,8 @@ Correctness takes priority over optimization.
 
 ## Current state
 
-Milestones 1 through 3 are complete, including the full base RV32I instruction
-set. The repository has:
+Milestones 1 through 4 are complete, including the full RV32IM instruction set.
+The repository has:
 
 - C++20/CMake project scaffolding
 - a reusable `rvemu::core` library
@@ -33,7 +33,8 @@ set. The repository has:
   `ANDI`, `SLLI`, `SRLI`, `SRAI`, `ADD`, `SUB`, `SLL`, `SLT`, `SLTU`, `XOR`,
   `SRL`, `SRA`, `OR`, `AND`, `JAL`, `JALR`, `BEQ`, `BNE`, `BLT`, `BGE`,
   `BLTU`, `BGEU`, `LB`, `LH`, `LW`, `LBU`, `LHU`, `SB`, `SH`, `SW`, `FENCE`,
-  `ECALL`, and `EBREAK`
+  `ECALL`, `EBREAK`, `MUL`, `MULH`, `MULHSU`, `MULHU`, `DIV`, `DIVU`, `REM`,
+  and `REMU`
 - modulo-2^32 arithmetic, PC-relative wraparound, host-independent signed
   comparison and arithmetic shift, effective-address wraparound, and enforced
   `x0`
@@ -44,14 +45,15 @@ set. The repository has:
   behavior
 - conservative single-hart `FENCE` execution and precise, non-retiring
   breakpoint and user-environment-call traps
+- host-independent full-width RV32M products and signed division behavior
 - GoogleTest unit tests
 - optional AddressSanitizer and UndefinedBehaviorSanitizer support
 - GCC and Clang GitHub Actions CI
 - a pinned GoogleTest source dependency by default, avoiding host-package ABI
   mismatches; `RVEMU_USE_SYSTEM_GTEST=ON` is an explicit opt-in
 
-RV32I is complete. RV32M is not implemented. There is no executable, ELF loader,
-syscall layer, debugger, performance model, or benchmark suite yet.
+RV32IM is complete. There is no executable, ELF loader, syscall layer, debugger,
+performance model, or benchmark suite yet.
 
 ## Architecture and directory structure
 
@@ -110,8 +112,20 @@ The CMake library target is `rvemu_core`, with the namespaced alias
   `SRA`, which use `0x20`. Register shift counts are always masked with `0x1f`.
 - Both register operands are read before the destination is written. Preserve
   this ordering so destination/source aliasing remains architecturally correct.
-- `funct7 == 0x01` register operations are RV32M encodings. They intentionally
-  trap until the M extension milestone and must not be mislabeled as RV32I.
+- `funct7 == 0x01` register operations are RV32M encodings. Their `funct3`
+  values 0 through 7 map in order to `MUL`, `MULH`, `MULHSU`, `MULHU`, `DIV`,
+  `DIVU`, `REM`, and `REMU`; other `funct7` values must continue through the
+  strict RV32I legality checks.
+- Form multiplication results in unsigned 64-bit space. For signed high-word
+  variants, convert each signed operand to unsigned magnitude, multiply, and
+  apply two's-complement negation to the 64-bit product when required. Do not
+  use host signed multiplication or implementation-defined casts.
+- Signed division similarly operates on unsigned magnitudes and reapplies the
+  quotient and dividend signs. This rounds toward zero and handles
+  `0x80000000 / 0xffffffff` without host signed overflow.
+- RV32M division never traps. A zero divisor returns `0xffffffff` for `DIV` and
+  `DIVU`, while `REM` and `REMU` return the dividend. Signed division overflow
+  returns `0x80000000` with remainder zero.
 - JAL and taken branches add their sign-extended immediate to the address of the
   current instruction using modulo-2^32 arithmetic. JALR adds its immediate to
   the original `rs1` value, then clears target bit zero.
@@ -234,17 +248,21 @@ Completed:
 - Milestone 3e: RV32I `FENCE`, `ECALL`, and `EBREAK` with forward-compatible
   fence handling, exact system encodings, and precise non-retiring traps. Base
   RV32I is complete.
+- Milestone 4: all eight RV32M operations with full-width multiplication,
+  host-independent signed arithmetic, defined zero-divisor/overflow behavior,
+  aliasing, `x0`, and strict-encoding tests. RV32IM is complete.
 
 Next milestone:
 
-- Implement all eight RV32M operations: `MUL`, `MULH`, `MULHSU`, `MULHU`,
-  `DIV`, `DIVU`, `REM`, and `REMU`.
-- Use explicit-width unsigned arithmetic and bit-level signed handling so host
-  overflow and signed-shift behavior cannot affect architectural results.
-- Test high-word multiplication, signed boundaries, division by zero, the
-  `INT32_MIN / -1` overflow case, register aliasing, writes to `x0`, and strict
-  `funct7 == 0x01` decoding.
+- Add a validated ELF32 loader for little-endian RISC-V executables.
+- Parse headers and program headers with explicit little-endian reads rather
+  than casting file bytes to host ABI structures.
+- Load `PT_LOAD` segments, zero-fill `p_memsz - p_filesz`, initialize the PC
+  from the entry point, and reject truncated, malformed, wrong-architecture, or
+  address-overflowing files without partial state changes.
+- Add focused synthetic ELF fixtures and, where a cross-compiler is available,
+  a minimal real RISC-V executable fixture.
 - Update both documentation files, validate, commit, and push.
 
-After RV32M: ELF loading, syscalls, interactive debugging, cache/branch models,
+After ELF loading: syscalls, interactive debugging, cache/branch models,
 reproducible benchmarks, and differential testing.

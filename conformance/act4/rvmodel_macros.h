@@ -22,4 +22,18 @@
 #define RVMODEL_IO_INIT(_R1, _R2, _R3)
 #define RVMODEL_IO_WRITE_STR(_R1, _R2, _R3, _STR_PTR)
 
+// ACT requires every platform hook to be defined even when privileged and
+// interrupt tests are excluded. These hooks must remain inert: rvemu has no
+// interrupt controller or privileged trap state.
+#define RVMODEL_INTERRUPT_LATENCY 0
+#define RVMODEL_TIMER_INT_SOON_DELAY 0
+#define RVMODEL_SET_MEXT_INT(_R1, _R2)
+#define RVMODEL_CLR_MEXT_INT(_R1, _R2)
+#define RVMODEL_SET_MSW_INT(_R1, _R2)
+#define RVMODEL_CLR_MSW_INT(_R1, _R2)
+#define RVMODEL_SET_SEXT_INT(_R1, _R2)
+#define RVMODEL_CLR_SEXT_INT(_R1, _R2)
+#define RVMODEL_SET_SSW_INT(_R1, _R2)
+#define RVMODEL_CLR_SSW_INT(_R1, _R2)
+
 #endif

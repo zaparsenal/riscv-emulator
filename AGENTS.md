@@ -15,7 +15,8 @@ Correctness takes priority over optimization.
 
 Milestones 1 through 6 are complete, including the full RV32IM instruction set,
 static ELF32 loading, hosted syscalls, freestanding stack setup, and a runnable
-command-line frontend. The repository has:
+command-line frontend. The first interactive-debugger milestone is also
+complete. The repository has:
 
 - C++20/CMake project scaffolding
 - a reusable `rvemu::core` library
@@ -75,6 +76,9 @@ command-line frontend. The repository has:
   `rvemu` executable with configurable mapping, stack, and strict step limit
 - normal guest exit-status propagation and precise diagnostics for loader,
   stack, limit, trap, unhandled-call, breakpoint, and host failures
+- `InteractiveDebugger` with a strict cumulative step budget, host breakpoints,
+  single stepping, register display, checked byte-memory display, and scripted
+  stream injection for deterministic tests
 - `rvemu-act-smoke` support that classifies self-checking ELF pass/fail outcomes
   separately from loader, trap, unknown-call, breakpoint, and limit failures
 - an immutable official ACT image pin, observed tool versions, I/M-oriented UDB
@@ -89,7 +93,8 @@ command-line frontend. The repository has:
 RV32IM, the static ELF loader, shared program-session contract, minimal
 output/termination syscalls, freestanding stack initializer, and command-line
 runner are complete. There is no full process-startup image, interactive
-debugger, performance model, or benchmark suite yet.
+debugger beyond the initial command set, performance model, or benchmark suite
+yet.
 
 The ACT 4 harness generated all 47 selected non-privileged RV32I/M ELFs from
 Sail results, but it is not a conformance result. The compatibility audit stops
@@ -110,6 +115,8 @@ include/rvemu/stack.hpp      Public freestanding stack-initialization API
 app/rvemu_cli.hpp            Testable command-line and hosted-run API
 app/rvemu_cli.cpp            Parsing, stream output, orchestration, diagnostics
 app/rvemu_main.cpp           Process entry point and exception boundary
+app/rvemu_debugger.hpp       Interactive debugger result and command-loop API
+app/rvemu_debugger.cpp       Breakpoints, stepping, and state inspection
 tools/act_smoke.hpp         Typed self-checking ELF smoke-runner API
 tools/act_smoke.cpp         ACT load, execution, and result classification
 tools/act_smoke_main.cpp    `rvemu-act-smoke` reporting executable
@@ -359,6 +366,22 @@ frontend policy, and the `rvemu_cli` target produces the `rvemu` executable.
 - `StreamOutputSink` calls the selected stream buffer once. A positive partial
   prefix is exact progress; zero or impossible progress is failure and is not
   retried.
+- Keep `InteractiveDebugger` in the host frontend layer. It observes
+  `CpuState`/`Memory` and drives `ProgramSession`; it must not add debugger
+  policy to instruction execution or patch guest code.
+- Debugger breakpoints are sorted, unique, four-byte-aligned mapped addresses.
+  A continue that follows a breakpoint stop executes that instruction once via
+  `ProgramSession::step()` before resuming with the breakpoint set. Removing a
+  different breakpoint must not lose this stopped-state behavior.
+- All debugger step and continue commands share the CLI's one cumulative guest
+  step limit. Aggregate retired-instruction and handled-call counts exactly as
+  `ProgramSession` defines them; breakpoint stops and traps consume no step.
+- Register inspection is read-only and includes the PC plus all 32 integer
+  registers with ABI names. Memory inspection is a checked read-only byte span
+  limited to 1-256 bytes; errors remain recoverable command errors.
+- Debugger input/output are injected streams for tests. The production CLI uses
+  stdin for commands and stderr for the prompt/status so guest stdout remains
+  distinct. EOF and explicit quit leave without further guest execution.
 
 ## Coding conventions
 
@@ -479,13 +502,21 @@ Completed:
   and derived Sail inputs, reproducible 47-ELF generation, and a strict
   compatibility audit that records the current RVC-flag and CSR blockers before
   emulator execution. No conformance pass is claimed.
+- Milestone 8a: an interactive debugger above `ProgramSession` with mapped
+  host breakpoints, step-over-on-continue behavior, single stepping, cumulative
+  limits/accounting, full integer-register display, checked byte-memory display,
+  recoverable command errors, and end-to-end CLI tests.
 
 Next milestone:
 
-- Add an interactive debugger loop using the existing `ProgramSession`
-  breakpoint and step boundaries. Begin with breakpoints, single stepping,
-  register inspection, and checked memory inspection; keep command parsing and
-  debugger state outside the architectural core.
+- Define one read-only execution-observation event contract before implementing
+  performance models. It must capture only facts already established by a
+  completed architectural transition (PC/instruction, memory access, and
+  control-flow outcome) without changing execution results.
+- Once that contract is stable, cache and branch-prediction models may proceed
+  in parallel and converge through one owner for event semantics and cycle
+  formulas. Do not publish performance figures before the benchmark harness
+  measures them.
 - Remove ACT's spurious RVC flag and CSR-based failure diagnostics at generation
   time without weakening rvemu's loader or execution target. Then rerun the
   complete 47-file audit, execute the ten-file smoke subset, and add it to CI
@@ -500,6 +531,6 @@ Next milestone:
   unsupported extensions out of the initial test selection.
 - Update both documentation files, validate, commit, and push.
 
-After the debugger foundation and initial conformance pass: cache/branch
+After the observation contract and initial conformance pass: cache/branch
 models, reproducible benchmarks, and expanded differential testing against
 Sail, QEMU, or Spike.

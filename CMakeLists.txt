@@ -38,6 +38,7 @@ option(
 if(RVEMU_BUILD_CLI OR BUILD_TESTING)
   add_library(rvemu_cli_support STATIC
     app/rvemu_cli.cpp
+    app/rvemu_debugger.cpp
   )
   add_library(rvemu::cli_support ALIAS rvemu_cli_support)
   target_include_directories(rvemu_cli_support PUBLIC app)

@@ -25,6 +25,7 @@ add_executable(rvemu_tests
   act_smoke_test.cpp
   control_flow_instructions_test.cpp
   cpu_state_test.cpp
+  debugger_test.cpp
   elf_loader_test.cpp
   execution_engine_test.cpp
   immediate_instructions_test.cpp

@@ -31,7 +31,8 @@ int main(const int argc, const char* const argv[]) {
 
     rvemu::cli::StreamOutputSink output(*std::cout.rdbuf(), *std::cerr.rdbuf());
     return rvemu::cli::run_cli(
-        std::get<rvemu::cli::ParseSuccess>(parsed).options, output, std::cerr);
+        std::get<rvemu::cli::ParseSuccess>(parsed).options, output, std::cin,
+        std::cerr);
   } catch (const std::exception& error) {
     std::cerr << "rvemu: internal host failure: " << error.what() << '\n';
     return rvemu::cli::kInfrastructureFailureExitStatus;

@@ -192,6 +192,7 @@ TEST(RvemuCliArgumentsTest, UsesDocumentedDefaults) {
   EXPECT_EQ(options.memory_size, kDefaultMemorySize);
   EXPECT_EQ(options.stack_size, kDefaultFreestandingStackSize);
   EXPECT_EQ(options.maximum_steps, kDefaultMaximumSteps);
+  EXPECT_FALSE(options.debug);
 }
 
 TEST(RvemuCliArgumentsTest, AcceptsDecimalHexadecimalAndOptionTerminator) {
@@ -214,6 +215,13 @@ TEST(RvemuCliArgumentsTest, RecognizesHelpOnlyByItself) {
   EXPECT_TRUE(std::holds_alternative<ParseHelp>(parse({"-h"})));
 }
 
+TEST(RvemuCliArgumentsTest, EnablesInteractiveDebuggerExplicitly) {
+  const ParseResult result = parse({"--debug", "program.elf"});
+
+  ASSERT_TRUE(std::holds_alternative<ParseSuccess>(result));
+  EXPECT_TRUE(std::get<ParseSuccess>(result).options.debug);
+}
+
 TEST(RvemuCliArgumentsTest, RejectsMalformedAndAmbiguousArguments) {
   const std::vector<std::vector<std::string_view>> invalid_cases{
       {},
@@ -222,6 +230,7 @@ TEST(RvemuCliArgumentsTest, RejectsMalformedAndAmbiguousArguments) {
       {"--unknown", "one.elf"},
       {"--help", "one.elf"},
       {"--help", "--help"},
+      {"--debug", "--debug", "one.elf"},
       {"--memory-base"},
       {"--memory-base", "-1", "one.elf"},
       {"--memory-base", "0x100000000", "one.elf"},
@@ -255,6 +264,7 @@ TEST(RvemuCliArgumentsTest, UsageDocumentsEverySupportedOption) {
   EXPECT_NE(output.str().find("--memory-size"), std::string::npos);
   EXPECT_NE(output.str().find("--stack-size"), std::string::npos);
   EXPECT_NE(output.str().find("--max-steps"), std::string::npos);
+  EXPECT_NE(output.str().find("--debug"), std::string::npos);
 }
 
 TEST(StreamOutputSinkTest, PreservesBinaryBytesAndRoutesBothStreams) {
@@ -424,6 +434,66 @@ TEST(RvemuCliRunnerTest, UnsupportedLinuxCallReturnsEnosysAndExecutionContinues)
 
   EXPECT_EQ(status, 9);
   EXPECT_TRUE(diagnostics.str().empty());
+}
+
+TEST(RvemuCliRunnerTest, InteractiveModeStopsInspectsAndContinuesToExit) {
+  const std::vector<std::uint8_t> payload = make_program_payload();
+  const TemporaryElf elf(make_elf(payload));
+  RecordingOutputSink output;
+  Options options = test_options(elf.path());
+  options.debug = true;
+  std::istringstream debugger_input(
+      "break 0x80000014\ncontinue\nregisters\ncontinue\n");
+  std::ostringstream diagnostics;
+
+  const int status =
+      run_cli(options, output, debugger_input, diagnostics);
+
+  EXPECT_EQ(status, 7);
+  EXPECT_NE(diagnostics.str().find("rvemu interactive debugger"),
+            std::string::npos);
+  EXPECT_NE(diagnostics.str().find(
+                "breakpoint reached at PC 0x80000014"),
+            std::string::npos);
+  EXPECT_NE(diagnostics.str().find("x17 (a7) = 0x00000040"),
+            std::string::npos);
+  EXPECT_NE(diagnostics.str().find("guest exited with status 7"),
+            std::string::npos);
+  ASSERT_EQ(output.records.size(), 1U);
+  EXPECT_EQ(output.records[0U].bytes,
+            (std::vector<Memory::Byte>{static_cast<Memory::Byte>('!')}));
+}
+
+TEST(RvemuCliRunnerTest, InteractiveQuitReturnsSuccessWithoutGuestExecution) {
+  const std::vector<std::uint8_t> payload = make_program_payload();
+  const TemporaryElf elf(make_elf(payload));
+  RecordingOutputSink output;
+  Options options = test_options(elf.path());
+  options.debug = true;
+  std::istringstream debugger_input("quit\n");
+  std::ostringstream diagnostics;
+
+  const int status =
+      run_cli(options, output, debugger_input, diagnostics);
+
+  EXPECT_EQ(status, 0);
+  EXPECT_TRUE(output.records.empty());
+  EXPECT_NE(diagnostics.str().find("stopped at PC 0x80000000"),
+            std::string::npos);
+  EXPECT_NE(diagnostics.str().find("leaving debugger"), std::string::npos);
+}
+
+TEST(RvemuCliRunnerTest, DebugModeRequiresTheInteractiveOverload) {
+  RecordingOutputSink output;
+  Options options = test_options("unused.elf");
+  options.debug = true;
+  std::ostringstream diagnostics;
+
+  const int status = run_cli(options, output, diagnostics);
+
+  EXPECT_EQ(status, kInfrastructureFailureExitStatus);
+  EXPECT_NE(diagnostics.str().find("requires an input stream"),
+            std::string::npos);
 }
 
 }  // namespace

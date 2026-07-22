@@ -29,6 +29,7 @@ struct Options {
   std::size_t memory_size{kDefaultMemorySize};
   std::size_t stack_size{kDefaultFreestandingStackSize};
   std::uint64_t maximum_steps{kDefaultMaximumSteps};
+  bool debug{false};
 };
 
 struct ParseSuccess {
@@ -80,9 +81,15 @@ struct HostedSessionFinished {
   std::uint32_t final_program_counter;
 };
 
+struct HostedDebuggerQuit {
+  SessionStatistics statistics;
+  std::uint32_t final_program_counter;
+};
+
 using HostedProgramResult =
     std::variant<HostedProgramFailure, HostedElfLoadFailure,
-                 HostedStackInitializationFailure, HostedSessionFinished>;
+                 HostedStackInitializationFailure, HostedSessionFinished,
+                 HostedDebuggerQuit>;
 
 [[nodiscard]] ParseResult parse_arguments(
     std::span<const std::string_view> arguments);
@@ -93,6 +100,10 @@ void print_usage(std::ostream& output);
                                               OutputSink& output);
 
 [[nodiscard]] int run_cli(const Options& options, OutputSink& output,
+                          std::ostream& diagnostics);
+
+[[nodiscard]] int run_cli(const Options& options, OutputSink& output,
+                          std::istream& debugger_input,
                           std::ostream& diagnostics);
 
 }  // namespace rvemu::cli

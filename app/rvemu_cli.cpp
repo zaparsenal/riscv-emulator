@@ -4,10 +4,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
+#include <istream>
 #include <limits>
 #include <new>
 #include <optional>
 #include <ostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -16,6 +18,7 @@
 #include <utility>
 #include <variant>
 
+#include "rvemu_debugger.hpp"
 #include "rvemu/cpu_state.hpp"
 #include "rvemu/memory.hpp"
 #include "rvemu/program_session.hpp"
@@ -110,6 +113,80 @@ void print_statistics(std::ostream& output,
                  static_cast<std::uint64_t>(options.memory_base);
 }
 
+template <typename Execute>
+[[nodiscard]] HostedProgramResult with_loaded_program(
+    const Options& options, OutputSink& output, Execute&& execute) {
+  if (!valid_memory_configuration(options)) {
+    return HostedProgramFailure{HostedProgramErrorCode::InvalidConfiguration};
+  }
+
+  try {
+    CpuState state;
+    Memory memory(options.memory_base, options.memory_size);
+    const ElfLoadResult load_result =
+        load_elf32_file(options.program_path, state, memory);
+    if (const auto* failure = std::get_if<ElfLoadFailure>(&load_result)) {
+      return HostedElfLoadFailure{*failure};
+    }
+
+    const ElfLoadSuccess loaded = std::get<ElfLoadSuccess>(load_result);
+    const StackInitializationResult stack_result =
+        initialize_freestanding_stack(
+            state, memory, loaded.loaded_address_begin,
+            loaded.loaded_address_end_exclusive, options.stack_size);
+    if (const auto* failure =
+            std::get_if<StackInitializationFailure>(&stack_result)) {
+      return HostedStackInitializationFailure{
+          *failure, loaded, memory.end_address_exclusive()};
+    }
+
+    LinuxSyscallEnvironment environment(output);
+    ProgramSession session(state, memory, environment);
+    return std::forward<Execute>(execute)(state, memory, session);
+  } catch (const std::bad_alloc&) {
+    return HostedProgramFailure{HostedProgramErrorCode::HostAllocationFailure};
+  } catch (const std::length_error&) {
+    return HostedProgramFailure{HostedProgramErrorCode::HostAllocationFailure};
+  } catch (const std::invalid_argument&) {
+    return HostedProgramFailure{HostedProgramErrorCode::InvalidConfiguration};
+  }
+}
+
+[[nodiscard]] HostedProgramResult run_debugger_program(
+    const Options& options, OutputSink& output, std::istream& debugger_input,
+    std::ostream& debugger_output) {
+  return with_loaded_program(
+      options, output,
+      [&](CpuState& state, const Memory& memory,
+          ProgramSession& session) -> HostedProgramResult {
+        debugger::InteractiveDebugger interactive(
+            state, memory, session, options.maximum_steps);
+        const debugger::DebuggerResult result =
+            interactive.run(debugger_input, debugger_output);
+        if (const auto* quit = std::get_if<debugger::DebuggerQuit>(&result)) {
+          return HostedDebuggerQuit{quit->statistics,
+                                    state.program_counter()};
+        }
+        if (const auto* limit =
+                std::get_if<SessionStepLimitReached>(&result)) {
+          return HostedSessionFinished{SessionRunResult{*limit},
+                                       state.program_counter()};
+        }
+        if (const auto* exited = std::get_if<SessionRunExited>(&result)) {
+          return HostedSessionFinished{SessionRunResult{*exited},
+                                       state.program_counter()};
+        }
+        if (const auto* unhandled =
+                std::get_if<SessionRunUnhandledEnvironmentCall>(&result)) {
+          return HostedSessionFinished{SessionRunResult{*unhandled},
+                                       state.program_counter()};
+        }
+        return HostedSessionFinished{
+            SessionRunResult{std::get<SessionRunTrapped>(result)},
+            state.program_counter()};
+      });
+}
+
 }  // namespace
 
 StreamOutputSink::StreamOutputSink(std::streambuf& standard_output,
@@ -149,6 +226,7 @@ ParseResult parse_arguments(
   bool memory_size_seen = false;
   bool stack_size_seen = false;
   bool maximum_steps_seen = false;
+  bool debug_seen = false;
 
   for (std::size_t index = 0U; index < arguments.size(); ++index) {
     const std::string_view argument = arguments[index];
@@ -161,6 +239,14 @@ ParseResult parse_arguments(
         return parse_failure("the help option was provided more than once");
       }
       help_requested = true;
+      continue;
+    }
+    if (!positional_only && argument == "--debug") {
+      if (debug_seen) {
+        return parse_failure("--debug was provided more than once");
+      }
+      debug_seen = true;
+      options.debug = true;
       continue;
     }
 
@@ -267,51 +353,37 @@ void print_usage(std::ostream& output) {
             "  --memory-size BYTES    guest mapping size (default 16777216)\n"
             "  --stack-size BYTES     reserved stack size (default 1048576)\n"
             "  --max-steps COUNT      strict guest-step limit (default 50000000)\n"
+            "  --debug                start in the interactive debugger\n"
             "  -h, --help             show this help\n";
 }
 
 HostedProgramResult run_program(const Options& options, OutputSink& output) {
-  if (!valid_memory_configuration(options)) {
-    return HostedProgramFailure{HostedProgramErrorCode::InvalidConfiguration};
-  }
-
-  try {
-    CpuState state;
-    Memory memory(options.memory_base, options.memory_size);
-    const ElfLoadResult load_result =
-        load_elf32_file(options.program_path, state, memory);
-    if (const auto* failure = std::get_if<ElfLoadFailure>(&load_result)) {
-      return HostedElfLoadFailure{*failure};
-    }
-
-    const ElfLoadSuccess loaded = std::get<ElfLoadSuccess>(load_result);
-    const StackInitializationResult stack_result =
-        initialize_freestanding_stack(
-            state, memory, loaded.loaded_address_begin,
-            loaded.loaded_address_end_exclusive, options.stack_size);
-    if (const auto* failure =
-            std::get_if<StackInitializationFailure>(&stack_result)) {
-      return HostedStackInitializationFailure{
-          *failure, loaded, memory.end_address_exclusive()};
-    }
-
-    LinuxSyscallEnvironment environment(output);
-    ProgramSession session(state, memory, environment);
-    SessionRunResult session_result = session.run(options.maximum_steps);
-    return HostedSessionFinished{std::move(session_result),
-                                 state.program_counter()};
-  } catch (const std::bad_alloc&) {
-    return HostedProgramFailure{HostedProgramErrorCode::HostAllocationFailure};
-  } catch (const std::length_error&) {
-    return HostedProgramFailure{HostedProgramErrorCode::HostAllocationFailure};
-  } catch (const std::invalid_argument&) {
-    return HostedProgramFailure{HostedProgramErrorCode::InvalidConfiguration};
-  }
+  return with_loaded_program(
+      options, output,
+      [&](CpuState& state, const Memory&,
+          ProgramSession& session) -> HostedProgramResult {
+        SessionRunResult session_result = session.run(options.maximum_steps);
+        return HostedSessionFinished{std::move(session_result),
+                                     state.program_counter()};
+      });
 }
 
 int run_cli(const Options& options, OutputSink& output,
             std::ostream& diagnostics) {
-  const HostedProgramResult program_result = run_program(options, output);
+  if (options.debug) {
+    diagnostics << "rvemu: debugger mode requires an input stream\n";
+    return kInfrastructureFailureExitStatus;
+  }
+  std::istringstream unused_input;
+  return run_cli(options, output, unused_input, diagnostics);
+}
+
+int run_cli(const Options& options, OutputSink& output,
+            std::istream& debugger_input, std::ostream& diagnostics) {
+  const HostedProgramResult program_result =
+      options.debug
+          ? run_debugger_program(options, output, debugger_input, diagnostics)
+          : run_program(options, output);
   if (const auto* failure =
           std::get_if<HostedProgramFailure>(&program_result)) {
     diagnostics << "rvemu: ";
@@ -346,6 +418,9 @@ int run_cli(const Options& options, OutputSink& output,
                 << failure->loaded_image.loaded_address_end_exclusive
                 << std::dec << ")\n";
     return kInfrastructureFailureExitStatus;
+  }
+  if (std::holds_alternative<HostedDebuggerQuit>(program_result)) {
+    return 0;
   }
 
   const HostedSessionFinished& finished =

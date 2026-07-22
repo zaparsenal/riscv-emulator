@@ -9,9 +9,9 @@ emulators.
 The project is being built in small, tested milestones. It now has a working
 fetch-decode-execute pipeline with complete RV32IM instruction support, a
 validated loader for static 32-bit RISC-V ELF executables, and a runnable
-`rvemu` command-line frontend. A host-side program session and a small
-Linux-style syscall environment provide program output and termination without
-changing architectural instruction behavior.
+`rvemu` command-line frontend with an interactive debugger. A host-side program
+session and a small Linux-style syscall environment provide program output and
+termination without changing architectural instruction behavior.
 
 ## Current status
 
@@ -75,6 +75,8 @@ milestones are complete:
   strict guest-step-limit options
 - end-to-end ELF execution with binary-safe stdout/stderr routing, guest exit
   status propagation, and precise loader, stack, limit, and trap diagnostics
+- an interactive debugger with cumulative bounded execution, software-free
+  breakpoints, single stepping, and checked register and memory inspection
 - a typed `rvemu-act-smoke` runner for already-generated, self-checking ACT 4
   RV32I/M ELF files
 - pinned ACT 4 inputs, a non-privileged halt ABI, linker script, and a ten-test
@@ -96,7 +98,7 @@ milestones are complete:
 RV32IM execution, static ELF32 loading, the shared program session, minimal
 output/termination syscalls, freestanding stack setup, and the command-line
 runner are complete. There is currently no full process-startup stack,
-interactive debugger, performance model, or published benchmark result.
+performance model, or published benchmark result.
 
 The ACT 4 smoke runner and reproducible generation/audit harness are also
 present, but no official ACT result is claimed. The pinned environment generated
@@ -168,6 +170,9 @@ command-line executable:
 - The CLI support layer owns pure argument parsing, standard-stream output,
   load/stack/session orchestration, and diagnostics. The small `main` function
   supplies process streams and maps normal guest exit to the host exit status.
+- `InteractiveDebugger` drives the same `ProgramSession` used by batch runs.
+  Breakpoints remain host-side addresses, stepping uses the normal session
+  transition, and all commands share one strict guest-step budget.
 
 Execution computes pending effects before committing them. A misaligned taken
 jump or branch therefore traps at the control-transfer instruction without
@@ -282,6 +287,7 @@ usage: rvemu [options] <program.elf>
   --memory-size BYTES    guest mapping size (default 16777216)
   --stack-size BYTES     reserved stack size (default 1048576)
   --max-steps COUNT      strict guest-step limit (default 50000000)
+  --debug                start in the interactive debugger
   -h, --help             show help
 ```
 
@@ -301,6 +307,26 @@ Normal termination returns the guest's low-eight-bit exit status. Help returns
 0, command-line syntax errors return 2, and host-side loader, stack, execution,
 or internal failures return 125 with a diagnostic. Because guest statuses are
 preserved, a normally exiting guest may also legitimately return 2 or 125.
+
+Start the debugger with `--debug`. Its initial command set is:
+
+```text
+continue, c             run until a breakpoint or termination
+step, s                 execute one guest step
+break, b [ADDRESS]      list or add a breakpoint
+delete, d ADDRESS|all   remove breakpoint(s)
+registers, r            display PC and all integer registers
+memory, x ADDRESS [N]   display 1-256 bytes (default 16)
+help, h                 display command help
+quit, q                 leave without running further
+```
+
+Breakpoint and numeric arguments accept decimal or `0x` hexadecimal forms.
+Breakpoints must be four-byte aligned and mapped. Continuing after a breakpoint
+executes the stopped instruction once before applying the breakpoint set again,
+so loops and adjacent breakpoints behave predictably. Debugger commands and
+diagnostics use stderr, while guest file descriptors 1 and 2 retain their
+normal output routing.
 
 ## ACT 4 smoke runner
 
@@ -333,7 +359,7 @@ pins, audit evidence, and exact boundary.
 ```text
 .
 ├── .github/workflows/ci.yml  # GCC/Clang sanitizer CI
-├── app/                      # CLI support and executable entry point
+├── app/                      # CLI, interactive debugger, and process entry
 ├── cmake/                    # Shared compiler and sanitizer options
 ├── conformance/act4/         # Pinned ACT 4 smoke inputs and limitations
 ├── include/rvemu/            # Public C++ interfaces
@@ -447,9 +473,10 @@ does not reset registers or clear unrelated memory.
    Sail configuration, generation harness, and compatibility audit are
    complete. All 47 selected ELFs generate, but execution is correctly blocked
    by spurious RVC flags and CSR-based ACT failure diagnostics.
-8. Add an interactive debugger with stepping and state inspection, building on
-   the existing host-breakpoint mechanism.
-9. Add configurable cache and branch-prediction models.
+8. **Complete:** add an initial interactive debugger with breakpoints,
+   single-stepping, register display, and checked memory inspection.
+9. Define the shared execution-observation contract, then add configurable
+   cache and branch-prediction models.
 10. Add reproducible workloads and report only measured benchmark results.
 11. Expand differential validation against Sail, QEMU, or Spike where each is
     practical.
@@ -486,8 +513,8 @@ does not reset registers or clear unrelated memory.
 - Hosted output supports only stdout and stderr. There is no guest stdin, file
   table, signal model, or broader Linux syscall emulation; all sink failures map
   to `-EIO` because `SIGPIPE` and richer host error translation are absent.
-- Host breakpoints are supported for bounded session runs, but there is no
-  interactive debugger or register/memory command interface yet.
+- The debugger has no symbols, source mapping, disassembly command, watchpoints,
+  register/memory mutation, reverse execution, or remote GDB protocol yet.
 - ACT generated all 47 selected non-privileged RV32I/M ELFs, but the audit
   correctly blocks execution because every file is RVC-flagged and contains
   three CSR reads in its failure path. No architectural conformance result is

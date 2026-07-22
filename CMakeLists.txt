@@ -28,6 +28,34 @@ target_include_directories(rvemu_core
 )
 target_link_libraries(rvemu_core PRIVATE rvemu_project_options)
 
+option(
+  RVEMU_BUILD_ACT_SMOKE_RUNNER
+  "Build the runner for self-checking ACT 4 RV32I/M ELF files"
+  OFF
+)
+
+if(RVEMU_BUILD_ACT_SMOKE_RUNNER OR BUILD_TESTING)
+  add_library(rvemu_act_smoke_support STATIC
+    tools/act_smoke.cpp
+  )
+  add_library(rvemu::act_smoke_support ALIAS rvemu_act_smoke_support)
+  target_include_directories(rvemu_act_smoke_support PUBLIC tools)
+  target_link_libraries(
+    rvemu_act_smoke_support
+    PUBLIC rvemu::core
+    PRIVATE rvemu_project_options
+  )
+endif()
+
+if(RVEMU_BUILD_ACT_SMOKE_RUNNER OR BUILD_TESTING)
+  add_executable(rvemu_act_smoke tools/act_smoke_main.cpp)
+  set_target_properties(rvemu_act_smoke PROPERTIES OUTPUT_NAME rvemu-act-smoke)
+  target_link_libraries(
+    rvemu_act_smoke
+    PRIVATE rvemu_act_smoke_support rvemu_project_options
+  )
+endif()
+
 if(BUILD_TESTING)
   add_subdirectory(tests)
 endif()

@@ -1,0 +1,12 @@
+# Paths are relative to the ACT 4 generated ELF directory.
+# This is a smoke selection, not the complete I/M certification suite.
+rv32i/I/I-add-00.elf
+rv32i/I/I-addi-00.elf
+rv32i/I/I-sra-00.elf
+rv32i/I/I-beq-00.elf
+rv32i/I/I-jalr-00.elf
+rv32i/I/I-lw-00.elf
+rv32i/I/I-sw-00.elf
+rv32i/M/M-mulh-00.elf
+rv32i/M/M-div-00.elf
+rv32i/M/M-remu-00.elf

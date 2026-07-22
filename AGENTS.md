@@ -67,6 +67,10 @@ foundation. The repository has:
 - `LinuxSyscallEnvironment` with injected stdout/stderr output, `write` (64),
   `exit` (93), `exit_group` (94), Linux-style error returns, and precise session
   integration
+- `rvemu-act-smoke` support that classifies self-checking ELF pass/fail outcomes
+  separately from loader, trap, unknown-call, breakpoint, and limit failures
+- pinned ACT 4 metadata, non-privileged halt macros, linker script, and ten-test
+  RV32I/M smoke manifest; no official generated test has been run yet
 - GoogleTest unit tests
 - optional AddressSanitizer and UndefinedBehaviorSanitizer support
 - GCC and Clang GitHub Actions CI
@@ -78,6 +82,10 @@ output/termination syscalls are complete. There is no stack initializer,
 command-line executable, interactive debugger, performance model, or benchmark
 suite yet.
 
+The initial ACT 4 smoke-runner plumbing is complete, but it is not a conformance
+result. Official generation and Sail comparison remain blocked on a validated
+I/M-only UDB configuration and an immutable tool container.
+
 ## Architecture and directory structure
 
 ```text
@@ -88,6 +96,10 @@ include/rvemu/execution_engine.hpp Public trap, result, and execution-loop API
 include/rvemu/linux_syscalls.hpp Public output sink and hosted Linux-call API
 include/rvemu/memory.hpp     Public checked-memory API and error types
 include/rvemu/program_session.hpp Public hosted-run and environment-call API
+tools/act_smoke.hpp         Typed self-checking ELF smoke-runner API
+tools/act_smoke.cpp         ACT load, execution, and result classification
+tools/act_smoke_main.cpp    `rvemu-act-smoke` reporting executable
+conformance/act4/           Pinned ACT inputs, macros, linker, and manifest
 src/cpu_state.cpp            CPU-state implementation
 src/elf_loader.cpp           ELF32 parsing, validation, and transactional load
 src/instruction.cpp          Format decoding and immediate reconstruction
@@ -246,6 +258,23 @@ The CMake library target is `rvemu_core`, with the namespaced alias
 - `exit` and `exit_group` both terminate this single-hart environment with
   `a0 & 0xff`. The session exit event retains the raw captured `a0`; CPU state
   remains at the precise `ECALL`.
+- The ACT smoke runner uses a separate exit-only environment: status zero is a
+  self-check pass and any raw nonzero status is a test failure. Unknown calls
+  remain infrastructure failures rather than being converted to `-ENOSYS`.
+- ACT smoke execution uses a fixed default mapping at `0x80000000`, 16 MiB of
+  memory, and a 50,000,000 guest-step limit. Loader errors, traps, unhandled
+  calls, breakpoints, and limit exhaustion must never be mislabeled as a failed
+  architectural assertion.
+- `rvemu-act-smoke` prints ACT's exact `RVCP-SUMMARY` form only for pass or test
+  failure. Its process statuses are 0 pass, 1 test failure, and 2 infrastructure
+  failure.
+- `RVEMU_BUILD_ACT_SMOKE_RUNNER` defaults off so `BUILD_TESTING=OFF` continues
+  to build only `rvemu_core`. Test-enabled builds compile the runner regardless,
+  and no-test builds may opt in explicitly.
+- Treat `conformance/act4/pins.json` and its adjacent macro, linker, manifest,
+  and README as the current runner contract. It pins the ACT commit and records
+  the reference versions, but does not replace an immutable container digest or
+  prove that the official generated tests ran.
 - The ELF loader supports fixed-address, 32-bit, little-endian RISC-V `ET_EXEC`
   files. It intentionally rejects `ET_DYN`; load bias, dynamic relocations, and
   an interpreter are not modeled.
@@ -311,6 +340,15 @@ cmake -S . -B build -DBUILD_TESTING=OFF
 cmake --build build --parallel
 ```
 
+To compile the ACT smoke runner without tests:
+
+```sh
+cmake -S . -B build-act \
+  -DBUILD_TESTING=OFF \
+  -DRVEMU_BUILD_ACT_SMOKE_RUNNER=ON
+cmake --build build-act --parallel
+```
+
 ## Workflow expectations
 
 Before editing, inspect the directory, Git status, current branch, configured
@@ -366,17 +404,21 @@ Completed:
 - Milestone 6b: injected stdout/stderr byte output, Linux RV32 `write`, `exit`,
   and `exit_group`, deterministic error returns, zero-copy checked guest ranges,
   partial/failing sink behavior, and complete write-to-exit session tests.
+- Milestone 7a: typed self-checking ACT ELF execution, bounded result
+  classification, exact ACT summary output, pinned baseline metadata,
+  non-privileged halt/linker inputs, a ten-test I/M smoke manifest, and focused
+  runner tests. This is plumbing only; no official ACT result is claimed.
 
 Next milestone:
 
 - Add a deliberately minimal 16-byte-aligned stack initializer for freestanding
   RV32IM/ILP32 programs, then a command-line executable that loads, runs,
   reports traps, and returns the guest exit status.
-- In parallel, integrate a small non-privileged RV32I/M ACT 4 conformance smoke
-  suite. Start from the `sail-RVI20U32` configuration with privileged tests
-  disabled and pin the architecture-test, Sail, compiler, configuration, macro,
-  and linker inputs. Curated aligned nontrapping tests belong in pull-request
-  CI; broader generated coverage can run on a scheduled or manual job.
+- Validate a minimal non-privileged RV32I/M UDB configuration inside the
+  official ACT environment, pin the container by immutable digest, generate the
+  ten selected self-checking ELFs, compare their signatures with Sail, and add
+  only the small verified smoke set to pull-request CI. Broader generated
+  coverage belongs in scheduled or manual CI.
 - The initial ACT 4 audit used `riscv-arch-test` commit
   `585fbaf97a7df6e2f0fe8808edd3ad839eb1afe3`, Sail 0.12, and the documented
   GCC 15/binutils 2.44 toolchain as its reproducibility baseline. Prefer the

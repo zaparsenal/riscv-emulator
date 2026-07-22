@@ -22,6 +22,7 @@ else()
 endif()
 
 add_executable(rvemu_tests
+  act_smoke_test.cpp
   control_flow_instructions_test.cpp
   cpu_state_test.cpp
   elf_loader_test.cpp
@@ -40,6 +41,7 @@ target_link_libraries(
   rvemu_tests
   PRIVATE
     rvemu::core
+    rvemu::act_smoke_support
     rvemu_project_options
     GTest::gtest_main
 )

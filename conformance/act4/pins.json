@@ -1,0 +1,37 @@
+{
+  "riscv_arch_test": {
+    "repository": "https://github.com/riscv-non-isa/riscv-arch-test.git",
+    "commit": "585fbaf97a7df6e2f0fe8808edd3ad839eb1afe3",
+    "framework_version_at_commit": "0.3.0"
+  },
+  "reference_baseline": {
+    "configuration": "config/sail/sail-RVI20U32",
+    "sail_riscv": "0.12",
+    "riscv_gcc": "15",
+    "binutils": "2.44"
+  },
+  "rvemu_target": {
+    "xlen": 32,
+    "extensions": ["I", "M"],
+    "instruction_alignment_bits": 32,
+    "memory_base": "0x80000000",
+    "memory_size_bytes": 16777216,
+    "instruction_limit": 50000000,
+    "linker_script": "link.ld",
+    "model_macros": "rvmodel_macros.h",
+    "halt_abi": {
+      "system_call_register": "a7",
+      "system_call_number": 93,
+      "status_register": "a0"
+    }
+  },
+  "excluded": [
+    "privileged architecture",
+    "CSRs",
+    "RVC",
+    "floating point",
+    "atomics",
+    "Zifencei",
+    "exceptions requiring a guest trap handler"
+  ]
+}

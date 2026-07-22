@@ -66,6 +66,10 @@ milestones are complete:
 - injectable stdout/stderr byte output through Linux RV32 `write` (64)
 - deterministic termination through `exit` (93) and `exit_group` (94)
 - Linux-style `-EBADF`, `-EFAULT`, `-EIO`, and `-ENOSYS` syscall results
+- a typed `rvemu-act-smoke` runner for already-generated, self-checking ACT 4
+  RV32I/M ELF files
+- pinned ACT 4 inputs, a non-privileged halt ABI, linker script, and a ten-test
+  I/M smoke manifest without any unearned conformance claim
 - GoogleTest coverage for state, memory, instruction formats, fetch, execution,
   signed boundaries, shift limits, operand aliasing, PC-relative wraparound,
   taken and untaken branches, load extension, little-endian stores, effective
@@ -74,7 +78,8 @@ milestones are complete:
   signed division overflow, ELF range arithmetic, malformed headers, segment
   alignment and ordering, entry-point validation, transactional loading,
   environment-call transitions, session limits, breakpoints, syscall routing,
-  invalid guest output ranges, partial writes, sink failures, and exit statuses
+  invalid guest output ranges, partial writes, sink failures, exit statuses,
+  ACT runner pass/fail and infrastructure classifications
 - optional AddressSanitizer and UndefinedBehaviorSanitizer instrumentation
 - GitHub Actions validation with GCC and Clang
 
@@ -82,6 +87,10 @@ RV32IM execution, static ELF32 loading, the shared program session, and the
 minimal output/termination syscall layer are complete. There is currently no
 initialized process stack, command-line executable, interactive debugger,
 performance model, or published benchmark result.
+
+The ACT 4 smoke runner foundation is also present, but no official ACT result
+is claimed: compatible official ELFs have not yet been generated or executed in
+the pinned reference environment.
 
 ## Supported instructions
 
@@ -242,15 +251,43 @@ The implementation follows the
 [RISC-V ELF psABI](https://riscv-non-isa.github.io/riscv-elf-psabi-doc/#elf-object-files)
 specifications.
 
+## ACT 4 smoke runner
+
+`rvemu-act-smoke` is a deliberately narrow bridge for already-generated ACT 4
+self-checking ELF files. It loads an ELF into 16 MiB of memory at `0x80000000`,
+runs at most 50,000,000 guest steps, and accepts only `exit` or `exit_group` as
+the test halt convention. Status zero produces the ACT `RVCP-SUMMARY` pass line;
+a nonzero status is a test failure. Loader errors, traps, unknown environment
+calls, unexpected breakpoints, and step-limit exhaustion are infrastructure
+failures, not architectural test failures.
+
+The reproducibility inputs under `conformance/act4/` pin
+`riscv-arch-test` commit
+`585fbaf97a7df6e2f0fe8808edd3ad839eb1afe3`, Sail 0.12, GCC 15, binutils
+2.44, the target memory map, linker script, halt macros, exclusions, and ten
+representative I/M test paths. This is runner plumbing and a planned smoke
+selection—not certification and not evidence that those ten official tests
+currently pass.
+
+Official generation is still blocked locally because the RISC-V GCC toolchain,
+Sail, `mise`, and `uv` are unavailable. More importantly, the upstream standard
+Sail UDB configuration emits privileged CSR setup and cleanup that this RV32IM
+core intentionally does not support. The next conformance step is to validate a
+minimal I/M-only UDB configuration inside an official container pinned by
+immutable digest, generate the selected ELFs, compare against Sail, and only
+then record results. See `conformance/act4/README.md` for the exact boundary.
+
 ## Repository layout
 
 ```text
 .
 ├── .github/workflows/ci.yml  # GCC/Clang sanitizer CI
 ├── cmake/                    # Shared compiler and sanitizer options
+├── conformance/act4/         # Pinned ACT 4 smoke inputs and limitations
 ├── include/rvemu/            # Public C++ interfaces
 ├── src/                      # Core implementation
 ├── tests/                    # GoogleTest unit tests
+├── tools/                    # ACT smoke support and executable
 ├── AGENTS.md                 # Context for future coding-agent sessions
 └── CMakeLists.txt            # Top-level build definition
 ```
@@ -280,6 +317,20 @@ ctest --test-dir build --output-on-failure
 For a normal build, omit `-DRVEMU_ENABLE_SANITIZERS=ON`. Set
 `-DBUILD_TESTING=OFF` to build only the core library and avoid downloading test
 dependencies.
+
+The ACT smoke executable is built as `build/rvemu-act-smoke` whenever tests are
+enabled. To build it without tests, opt in explicitly:
+
+```sh
+cmake -S . -B build-act \
+  -DBUILD_TESTING=OFF \
+  -DRVEMU_BUILD_ACT_SMOKE_RUNNER=ON
+cmake --build build-act --parallel
+build-act/rvemu-act-smoke path/to/self-checking-rv32im.elf
+```
+
+Its process exit status is 0 for a passing self-check, 1 for a reported test
+failure, and 2 for runner/infrastructure failure.
 
 ## Usage
 
@@ -339,9 +390,9 @@ does not reset registers or clear unrelated memory.
 6. **In progress:** the shared program-session contract, host breakpoints,
    accounting, and Linux-style output/termination syscalls are complete; next
    add stack initialization and a minimal executable.
-7. **Parallel next:** integrate an initial non-privileged RV32I/M
-   `riscv-arch-test` ACT 4 conformance smoke suite, followed by broader
-   scheduled coverage as the architectural platform grows.
+7. **In progress:** the non-privileged ACT 4 runner, pins, halt macros, linker,
+   and smoke manifest are complete; next validate an I/M-only UDB configuration
+   in an immutable official container and run the generated tests against Sail.
 8. Add an interactive debugger with stepping and state inspection, building on
    the existing host-breakpoint mechanism.
 9. Add configurable cache and branch-prediction models.
@@ -380,6 +431,6 @@ does not reset registers or clear unrelated memory.
   to `-EIO` because `SIGPIPE` and richer host error translation are absent.
 - Host breakpoints are supported for bounded session runs, but there is no
   interactive debugger or register/memory command interface yet.
-- RISC-V architectural conformance tests are planned but are not integrated
-  into the build yet.
+- The ACT 4 runner is integrated and unit-tested, but no official generated ACT
+  ELF has been run. No architectural conformance result is published yet.
 - There are no performance claims or results yet.

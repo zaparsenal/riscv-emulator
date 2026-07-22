@@ -62,15 +62,21 @@ foundation. The repository has:
   PC effects
 - separate guest-step, instruction-retirement, and handled-call statistics
 - pre-execution host breakpoints that do not modify guest memory
+- `Memory::read_span` for a single checked, unaligned, zero-copy, read-only byte
+  range used by host services
+- `LinuxSyscallEnvironment` with injected stdout/stderr output, `write` (64),
+  `exit` (93), `exit_group` (94), Linux-style error returns, and precise session
+  integration
 - GoogleTest unit tests
 - optional AddressSanitizer and UndefinedBehaviorSanitizer support
 - GCC and Clang GitHub Actions CI
 - a pinned GoogleTest source dependency by default, avoiding host-package ABI
   mismatches; `RVEMU_USE_SYSTEM_GTEST=ON` is an explicit opt-in
 
-RV32IM, the static ELF loader, and the shared program-session contract are
-complete. There is no concrete syscall handler, command-line executable,
-interactive debugger, performance model, or benchmark suite yet.
+RV32IM, the static ELF loader, the shared program-session contract, and minimal
+output/termination syscalls are complete. There is no stack initializer,
+command-line executable, interactive debugger, performance model, or benchmark
+suite yet.
 
 ## Architecture and directory structure
 
@@ -79,12 +85,14 @@ include/rvemu/cpu_state.hpp  Public CPU-state API
 include/rvemu/elf_loader.hpp Public ELF load results and file/span loader APIs
 include/rvemu/instruction.hpp Public decoded-instruction types and decoder
 include/rvemu/execution_engine.hpp Public trap, result, and execution-loop API
+include/rvemu/linux_syscalls.hpp Public output sink and hosted Linux-call API
 include/rvemu/memory.hpp     Public checked-memory API and error types
 include/rvemu/program_session.hpp Public hosted-run and environment-call API
 src/cpu_state.cpp            CPU-state implementation
 src/elf_loader.cpp           ELF32 parsing, validation, and transactional load
 src/instruction.cpp          Format decoding and immediate reconstruction
 src/execution_engine.cpp     Fetch, current ISA execution, step, and bounded run
+src/linux_syscalls.cpp       Hosted write/exit syscall policy and validation
 src/memory.cpp               Little-endian memory implementation
 src/program_session.cpp      Hosted execution, call dispatch, and breakpoints
 tests/                       Focused GoogleTest unit tests
@@ -116,6 +124,10 @@ The CMake library target is `rvemu_core`, with the namespaced alias
   architectural traps.
 - Multi-byte memory values are assembled explicitly as little-endian; host
   endianness must not affect behavior.
+- `Memory::read_span` performs the same widened bounds validation as scalar
+  reads but imposes no alignment. Its returned view remains valid while the
+  same `Memory` object exists and has not been moved; writes and `clear()` may
+  change the viewed bytes but never resize the backing storage.
 - The decoder recognizes major opcodes and normalizes the fields relevant to
   each format. Instruction-specific legality checks belong to execution.
 - Encoded immediates remain `std::uint32_t`; sign extension uses unsigned bit
@@ -215,6 +227,25 @@ The CMake library target is `rvemu_core`, with the namespaced alias
   the ILP32 soft-float ABI. Compile fixtures explicitly with
   `-march=rv32im -mabi=ilp32`; do not let default RVC or floating-point targets
   silently enter tests.
+- `LinuxSyscallEnvironment` recognizes only `write` 64, `exit` 93, and
+  `exit_group` 94. Unsupported calls resume with two's-complement `-ENOSYS`;
+  they are handled host calls, not unhandled architectural traps.
+- Hosted `write` accepts only file descriptors 1 and 2 and maps them to distinct
+  sink channels. Reject other descriptors with `-EBADF` before inspecting the
+  guest pointer, including for a zero count. A zero count on a recognized
+  descriptor succeeds without inspecting the pointer or calling the sink.
+- Clamp a nonzero requested write to Linux's `0x7ffff000` transfer maximum, then
+  obtain one complete `Memory::read_span` before calling the sink. Invalid
+  ranges return `-EFAULT` with no sink call. This validation is atomic with
+  respect to guest memory access, including at the top of the address space.
+- Call the output sink at most once. A valid partial prefix resumes with that
+  count and is not retried. A failed result, thrown exception, or count larger
+  than the offered span maps to `-EIO`. `OutputWriteFailed` contractually means
+  zero bytes were consumed; sinks must not throw after producing side effects
+  because an unknown partial result cannot be reconstructed.
+- `exit` and `exit_group` both terminate this single-hart environment with
+  `a0 & 0xff`. The session exit event retains the raw captured `a0`; CPU state
+  remains at the precise `ECALL`.
 - The ELF loader supports fixed-address, 32-bit, little-endian RISC-V `ET_EXEC`
   files. It intentionally rejects `ET_DYN`; load bias, dynamic relocations, and
   an interpreter are not modeled.
@@ -332,14 +363,12 @@ Completed:
 - Milestone 6a: a shared `ProgramSession` above the unchanged execution engine,
   with Linux-style call capture, explicit resume/exit/unhandled transitions,
   separate accounting, strict run limits, host breakpoints, and focused tests.
+- Milestone 6b: injected stdout/stderr byte output, Linux RV32 `write`, `exit`,
+  and `exit_group`, deterministic error returns, zero-copy checked guest ranges,
+  partial/failing sink behavior, and complete write-to-exit session tests.
 
 Next milestone:
 
-- Implement the concrete RV32 Linux-style calls `write` (64), `exit` (93), and
-  `exit_group` (94) above `ProgramSession`.
-- Route output through an injectable byte sink, validate the complete guest
-  address range before emitting any bytes, and return deterministic Linux-style
-  error values for unsupported calls or bad arguments.
 - Add a deliberately minimal 16-byte-aligned stack initializer for freestanding
   RV32IM/ILP32 programs, then a command-line executable that loads, runs,
   reports traps, and returns the guest exit status.

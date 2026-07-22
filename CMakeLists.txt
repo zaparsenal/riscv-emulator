@@ -15,6 +15,7 @@ add_library(rvemu_core
   src/elf_loader.cpp
   src/execution_engine.cpp
   src/instruction.cpp
+  src/linux_syscalls.cpp
   src/memory.cpp
   src/program_session.cpp
 )

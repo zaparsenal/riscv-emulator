@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -55,6 +56,8 @@ class Memory final {
   [[nodiscard]] Byte read8(Address address) const;
   [[nodiscard]] std::uint16_t read16(Address address) const;
   [[nodiscard]] std::uint32_t read32(Address address) const;
+  [[nodiscard]] std::span<const Byte> read_span(Address address,
+                                                std::size_t width) const;
 
   void write8(Address address, Byte value);
   void write16(Address address, std::uint16_t value);

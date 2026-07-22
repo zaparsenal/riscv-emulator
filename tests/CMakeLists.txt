@@ -28,6 +28,7 @@ add_executable(rvemu_tests
   execution_engine_test.cpp
   immediate_instructions_test.cpp
   instruction_test.cpp
+  linux_syscalls_test.cpp
   memory_test.cpp
   memory_instructions_test.cpp
   m_extension_instructions_test.cpp

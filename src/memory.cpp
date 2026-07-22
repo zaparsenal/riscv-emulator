@@ -106,6 +106,12 @@ std::uint32_t Memory::read32(const Address address) const {
          (static_cast<std::uint32_t>(bytes_[offset + 3U]) << 24U);
 }
 
+std::span<const Memory::Byte> Memory::read_span(
+    const Address address, const std::size_t width) const {
+  const auto offset = checked_offset(address, width, MemoryOperation::Read);
+  return std::span<const Byte>(bytes_).subspan(offset, width);
+}
+
 void Memory::write8(const Address address, const Byte value) {
   bytes_[checked_offset(address, sizeof(Byte), MemoryOperation::Write)] = value;
 }

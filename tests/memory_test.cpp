@@ -49,6 +49,51 @@ TEST(MemoryTest, ByteWritesComposeLittleEndianValues) {
   EXPECT_EQ(memory.read32(0U), 0x12345678U);
 }
 
+TEST(MemoryTest, ReadSpanReturnsAnUnalignedReadOnlyByteView) {
+  Memory memory(8U);
+  memory.write8(1U, 0x11U);
+  memory.write8(2U, 0x22U);
+  memory.write8(3U, 0x33U);
+
+  const std::span<const Memory::Byte> bytes = memory.read_span(1U, 3U);
+
+  ASSERT_EQ(bytes.size(), 3U);
+  EXPECT_EQ(bytes[0U], 0x11U);
+  EXPECT_EQ(bytes[1U], 0x22U);
+  EXPECT_EQ(bytes[2U], 0x33U);
+}
+
+TEST(MemoryTest, ReadSpanAcceptsExactEndAndZeroLengthRanges) {
+  Memory memory(0x1000U, 4U);
+
+  EXPECT_EQ(memory.read_span(0x1002U, 2U).size(), 2U);
+  EXPECT_TRUE(memory.read_span(0x1004U, 0U).empty());
+}
+
+TEST(MemoryTest, ReadSpanRejectsOutOfBoundsRangesWithoutAlignmentRules) {
+  Memory memory(0x1000U, 4U);
+
+  EXPECT_THROW((void)memory.read_span(0x0FFFU, 1U),
+               MemoryOutOfBoundsError);
+  EXPECT_THROW((void)memory.read_span(0x1003U, 2U),
+               MemoryOutOfBoundsError);
+  EXPECT_THROW((void)memory.read_span(0x0FFFU, 0U),
+               MemoryOutOfBoundsError);
+}
+
+TEST(MemoryTest, ReadSpanSupportsAViewEndingAtTheAddressSpaceTop) {
+  Memory memory(0xFFFFFFFCU, 4U);
+  memory.write8(0xFFFFFFFEU, 0xA5U);
+  memory.write8(0xFFFFFFFFU, 0x5AU);
+
+  const std::span<const Memory::Byte> bytes =
+      memory.read_span(0xFFFFFFFEU, 2U);
+
+  ASSERT_EQ(bytes.size(), 2U);
+  EXPECT_EQ(bytes[0U], 0xA5U);
+  EXPECT_EQ(bytes[1U], 0x5AU);
+}
+
 TEST(MemoryTest, SupportsARegionEndingAtTheTopOfTheAddressSpace) {
   Memory memory(0xFFFFFFFCU, 4U);
 

@@ -9,8 +9,8 @@ emulators.
 The project is being built in small, tested milestones. It now has a working
 fetch-decode-execute pipeline with complete RV32IM instruction support and a
 validated loader for static 32-bit RISC-V ELF executables. A host-side program
-session now provides the narrow interface needed to add syscalls and basic
-debugging without changing architectural instruction behavior.
+session and a small Linux-style syscall environment now provide program output
+and termination without changing architectural instruction behavior.
 
 ## Current status
 
@@ -23,6 +23,7 @@ milestones are complete:
 - reset support for CPU state
 - contiguous, zero-initialized memory at a configurable 32-bit base address
 - bounds-checked byte, halfword, and word accesses
+- bounds-checked, zero-copy read-only byte spans for hosted output
 - typed memory errors for out-of-bounds and misaligned accesses
 - little-endian reads and writes
 - decoding for the R, I, S, B, U, and J instruction layouts, including explicit
@@ -62,6 +63,9 @@ milestones are complete:
 - separate counts for guest steps, architecturally retired instructions, and
   handled environment calls
 - host breakpoints that stop before execution without modifying guest memory
+- injectable stdout/stderr byte output through Linux RV32 `write` (64)
+- deterministic termination through `exit` (93) and `exit_group` (94)
+- Linux-style `-EBADF`, `-EFAULT`, `-EIO`, and `-ENOSYS` syscall results
 - GoogleTest coverage for state, memory, instruction formats, fetch, execution,
   signed boundaries, shift limits, operand aliasing, PC-relative wraparound,
   taken and untaken branches, load extension, little-endian stores, effective
@@ -69,14 +73,15 @@ milestones are complete:
   instructions, access faults, high-word multiplication, division by zero, and
   signed division overflow, ELF range arithmetic, malformed headers, segment
   alignment and ordering, entry-point validation, transactional loading,
-  environment-call transitions, session limits, and breakpoints
+  environment-call transitions, session limits, breakpoints, syscall routing,
+  invalid guest output ranges, partial writes, sink failures, and exit statuses
 - optional AddressSanitizer and UndefinedBehaviorSanitizer instrumentation
 - GitHub Actions validation with GCC and Clang
 
-RV32IM execution and static ELF32 loading are complete, and the shared program
-session is in place. There is currently no concrete syscall implementation,
-command-line executable, interactive debugger, performance model, or published
-benchmark result.
+RV32IM execution, static ELF32 loading, the shared program session, and the
+minimal output/termination syscall layer are complete. There is currently no
+initialized process stack, command-line executable, interactive debugger,
+performance model, or published benchmark result.
 
 ## Supported instructions
 
@@ -119,7 +124,8 @@ The implementation currently builds one reusable library, `rvemu::core`:
 - `Memory` owns a contiguous byte region mapped into the 32-bit address space.
   Multi-byte operations are explicitly little-endian. Halfword and word
   operations require natural alignment; invalid accesses throw typed errors
-  before modifying memory.
+  before modifying memory. `read_span` validates an arbitrary byte range once
+  and returns a read-only view without imposing alignment.
 - `decode_instruction` recognizes RV32I major opcodes and produces normalized
   register, function, format, and immediate fields. Immediate reconstruction is
   host-independent and avoids signed-overflow assumptions.
@@ -172,6 +178,25 @@ or a terminating call each consumes one step. Statistics keep those steps
 separate from architectural retirement and handled-call counts. Breakpoints are
 checked against the PC before execution and do not patch guest code; direct
 `step()` calls intentionally ignore them.
+
+`LinuxSyscallEnvironment` implements the current hosted ABI. It recognizes
+`write` (64), `exit` (93), and `exit_group` (94), using `a0` through `a2` for
+the `write` file descriptor, guest address, and byte count. File descriptors 1
+and 2 are routed to distinct stdout/stderr channels on an injected `OutputSink`;
+other descriptors return `-EBADF`. Unknown calls return `-ENOSYS` and resume.
+
+Before invoking the sink once, `write` obtains one checked read-only view of the
+entire effective guest range. Invalid ranges return `-EFAULT` without output,
+including ranges that cross the mapping or wrap past the 32-bit address space.
+A zero-length write to a recognized descriptor returns zero without inspecting
+its pointer. Linux's `0x7ffff000` maximum transfer size is applied before range
+validation. A sink may report a valid partial prefix, which is returned without
+retrying. Sink failure, an exception, or an impossible byte count returns
+`-EIO`; a failed sink result must mean that it consumed no bytes.
+
+Both exit calls terminate the single-hart session with the low eight bits of
+`a0`. The raw argument remains available in the captured `EnvironmentCall`, and
+the architectural PC and registers remain at the precise trapping `ECALL`.
 
 RV32M signed operations use unsigned sign-and-magnitude intermediates rather
 than host signed casts. Multiplication constructs the full 64-bit product before
@@ -265,6 +290,7 @@ The public headers can be used from another CMake target after linking
 #include <rvemu/cpu_state.hpp>
 #include <rvemu/elf_loader.hpp>
 #include <rvemu/execution_engine.hpp>
+#include <rvemu/linux_syscalls.hpp>
 #include <rvemu/memory.hpp>
 #include <rvemu/program_session.hpp>
 
@@ -310,9 +336,9 @@ does not reset registers or clear unrelated memory.
 4. **Complete:** all RV32M multiplication, division, and remainder operations,
    including architectural zero-divisor and signed-overflow behavior.
 5. **Complete:** load validated, static 32-bit little-endian RISC-V ELF files.
-6. **In progress:** the shared program-session contract, host breakpoints, and
-   accounting are complete; next add deterministic Linux-style output and
-   termination syscalls, stack initialization, and a minimal executable.
+6. **In progress:** the shared program-session contract, host breakpoints,
+   accounting, and Linux-style output/termination syscalls are complete; next
+   add stack initialization and a minimal executable.
 7. **Parallel next:** integrate an initial non-privileged RV32I/M
    `riscv-arch-test` ACT 4 conformance smoke suite, followed by broader
    scheduled coverage as the architectural platform grows.
@@ -336,8 +362,8 @@ does not reset registers or clear unrelated memory.
 - There is no CSR or architectural trap-handler state yet; traps are returned to
   the host caller.
 - There is no privilege-mode state. `ECALL` is currently classified as a
-  user-mode environment call; `ProgramSession` can dispatch it, but no concrete
-  syscall set or process ABI is implemented yet.
+  user-mode environment call. The hosted environment implements only `write`,
+  `exit`, and `exit_group`, not a complete Linux process ABI.
 - ELF loading currently supports only fixed-address `ET_EXEC` files with
   `e_flags == 0`, System V/unspecified OS ABI version 0, sorted and
   nonoverlapping `PT_LOAD` ranges, and no dynamic-linking or TLS segments.
@@ -349,6 +375,9 @@ does not reset registers or clear unrelated memory.
   frontend yet.
 - There is no initialized user stack, argument vector, environment, or auxiliary
   vector yet.
+- Hosted output supports only stdout and stderr. There is no guest stdin, file
+  table, signal model, or broader Linux syscall emulation; all sink failures map
+  to `-EIO` because `SIGPIPE` and richer host error translation are absent.
 - Host breakpoints are supported for bounded session runs, but there is no
   interactive debugger or register/memory command interface yet.
 - RISC-V architectural conformance tests are planned but are not integrated

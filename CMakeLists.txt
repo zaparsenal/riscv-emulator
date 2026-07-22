@@ -16,6 +16,7 @@ add_library(rvemu_core
   src/execution_engine.cpp
   src/instruction.cpp
   src/memory.cpp
+  src/program_session.cpp
 )
 add_library(rvemu::core ALIAS rvemu_core)
 

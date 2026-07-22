@@ -8,7 +8,9 @@ emulators.
 
 The project is being built in small, tested milestones. It now has a working
 fetch-decode-execute pipeline with complete RV32IM instruction support and a
-validated loader for static 32-bit RISC-V ELF executables.
+validated loader for static 32-bit RISC-V ELF executables. A host-side program
+session now provides the narrow interface needed to add syscalls and basic
+debugging without changing architectural instruction behavior.
 
 ## Current status
 
@@ -53,19 +55,28 @@ milestones are complete:
 - atomic load failures that preserve memory and the program counter
 - typed ELF load results with stable error categories and optional failing
   program-header indexes
+- a `ProgramSession` wrapper that captures user environment calls using the
+  RV32 Linux register convention (`a7` plus `a0`-`a5`)
+- injectable environment-call handling that can resume execution, terminate a
+  program, or preserve the original precise trap as unhandled
+- separate counts for guest steps, architecturally retired instructions, and
+  handled environment calls
+- host breakpoints that stop before execution without modifying guest memory
 - GoogleTest coverage for state, memory, instruction formats, fetch, execution,
   signed boundaries, shift limits, operand aliasing, PC-relative wraparound,
   taken and untaken branches, load extension, little-endian stores, effective
   address wraparound, misaligned targets and data, instruction limits, illegal
   instructions, access faults, high-word multiplication, division by zero, and
   signed division overflow, ELF range arithmetic, malformed headers, segment
-  alignment and ordering, entry-point validation, and transactional loading
+  alignment and ordering, entry-point validation, transactional loading,
+  environment-call transitions, session limits, and breakpoints
 - optional AddressSanitizer and UndefinedBehaviorSanitizer instrumentation
 - GitHub Actions validation with GCC and Clang
 
-RV32IM execution and static ELF32 loading are complete. There is currently no
-command-line executable, system-call layer, debugger, performance model, or
-published benchmark result.
+RV32IM execution and static ELF32 loading are complete, and the shared program
+session is in place. There is currently no concrete syscall implementation,
+command-line executable, interactive debugger, performance model, or published
+benchmark result.
 
 ## Supported instructions
 
@@ -93,6 +104,11 @@ Instructions outside the support table currently return an `IllegalInstruction`
 trap. They belong to unsupported extensions, privileged execution, or reserved
 encoding space rather than the supported RV32IM target.
 
+The current platform target is little-endian RV32IM with `IALIGN=32` and the
+ILP32 soft-float ABI. Toolchain-generated test programs must explicitly use
+`-march=rv32im -mabi=ilp32`; compressed, floating-point, atomic, CSR, and
+privileged instructions are outside the current scope.
+
 ## Architecture
 
 The implementation currently builds one reusable library, `rvemu::core`:
@@ -111,6 +127,10 @@ The implementation currently builds one reusable library, `rvemu::core`:
   decodes, and executes one instruction. `run(limit)` executes until its strict
   instruction limit or the first trap. Both APIs return variants, so successful
   execution cannot be confused with a trap.
+- `ProgramSession` owns no architectural state. It wraps an `ExecutionEngine`,
+  dispatches precise user environment-call traps to an injected handler,
+  applies the handler's explicit resume/exit decision, and supports host-side
+  breakpoints and bounded program runs.
 - `load_elf32` and `load_elf32_file` validate a complete executable before
   loading its segments into `Memory` and setting the entry-point PC. Failures
   return an `ElfLoadFailure`; successful loads report the segment and byte
@@ -138,9 +158,20 @@ extension.
 
 `ECALL` and `EBREAK` are exact-encoding, precise traps: they do not advance the
 PC, mutate registers, or count as retired instructions. Until privilege modes
-are modeled, `ECALL` is reported as `EnvironmentCallFromUserMode`; the later
-system-call environment will consume that trap rather than changing instruction
-semantics.
+are modeled, `ECALL` is reported as `EnvironmentCallFromUserMode`.
+
+`ProgramSession` may consume that precise `ECALL` trap. It snapshots `a7` as the
+call number and `a0` through `a5` as arguments before dispatching to a handler
+that receives read-only memory. A resume decision writes only the return value
+to `a0` and advances the PC by four; an exit or unhandled decision leaves the
+trapping architectural state unchanged. This keeps host policy out of the CPU
+core and gives later syscall, CLI, and debugger work one stable boundary.
+
+Session run limits count guest steps: a retired instruction, a resumed call,
+or a terminating call each consumes one step. Statistics keep those steps
+separate from architectural retirement and handled-call counts. Breakpoints are
+checked against the PC before execution and do not patch guest code; direct
+`step()` calls intentionally ignore them.
 
 RV32M signed operations use unsigned sign-and-magnitude intermediates rather
 than host signed casts. Multiplication constructs the full 64-bit product before
@@ -154,9 +185,9 @@ Signed comparisons use sign-bit-biased unsigned ordering, and arithmetic right
 shift explicitly constructs the sign-fill bits. This keeps RV32I behavior
 independent of the host compiler's signed-shift and overflow choices.
 
-Keeping CPU state, memory, decoding, execution, and ELF loading independently
-testable gives later syscall, debugging, and performance features clear
-integration points.
+Keeping CPU state, memory, decoding, execution, program hosting, and ELF loading
+independently testable gives later syscall, debugging, and performance features
+clear integration points.
 
 ## ELF loading
 
@@ -235,6 +266,7 @@ The public headers can be used from another CMake target after linking
 #include <rvemu/elf_loader.hpp>
 #include <rvemu/execution_engine.hpp>
 #include <rvemu/memory.hpp>
+#include <rvemu/program_session.hpp>
 
 rvemu::CpuState cpu;
 rvemu::Memory memory(0x80000000U, 64U * 1024U);
@@ -278,11 +310,18 @@ does not reset registers or clear unrelated memory.
 4. **Complete:** all RV32M multiplication, division, and remainder operations,
    including architectural zero-divisor and signed-overflow behavior.
 5. **Complete:** load validated, static 32-bit little-endian RISC-V ELF files.
-6. **Next:** add a minimal system-call environment for output and termination.
-7. Add an interactive debugger with stepping, breakpoints, and state inspection.
-8. Add configurable cache and branch-prediction models.
-9. Add reproducible workloads and report only measured benchmark results.
-10. Add practical differential tests against QEMU or Spike.
+6. **In progress:** the shared program-session contract, host breakpoints, and
+   accounting are complete; next add deterministic Linux-style output and
+   termination syscalls, stack initialization, and a minimal executable.
+7. **Parallel next:** integrate an initial non-privileged RV32I/M
+   `riscv-arch-test` ACT 4 conformance smoke suite, followed by broader
+   scheduled coverage as the architectural platform grows.
+8. Add an interactive debugger with stepping and state inspection, building on
+   the existing host-breakpoint mechanism.
+9. Add configurable cache and branch-prediction models.
+10. Add reproducible workloads and report only measured benchmark results.
+11. Expand differential validation against Sail, QEMU, or Spike where each is
+    practical.
 
 ## Current limitations
 
@@ -297,7 +336,8 @@ does not reset registers or clear unrelated memory.
 - There is no CSR or architectural trap-handler state yet; traps are returned to
   the host caller.
 - There is no privilege-mode state. `ECALL` is currently classified as a
-  user-mode environment call for the future user-level syscall layer.
+  user-mode environment call; `ProgramSession` can dispatch it, but no concrete
+  syscall set or process ABI is implemented yet.
 - ELF loading currently supports only fixed-address `ET_EXEC` files with
   `e_flags == 0`, System V/unspecified OS ABI version 0, sorted and
   nonoverlapping `PT_LOAD` ranges, and no dynamic-linking or TLS segments.
@@ -307,4 +347,10 @@ does not reset registers or clear unrelated memory.
 - ELF `PF_R`, `PF_W`, and `PF_X` permissions are not enforced by flat memory.
 - The loader is available through the C++ library, but there is no command-line
   frontend yet.
+- There is no initialized user stack, argument vector, environment, or auxiliary
+  vector yet.
+- Host breakpoints are supported for bounded session runs, but there is no
+  interactive debugger or register/memory command interface yet.
+- RISC-V architectural conformance tests are planned but are not integrated
+  into the build yet.
 - There are no performance claims or results yet.

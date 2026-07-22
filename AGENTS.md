@@ -14,7 +14,8 @@ Correctness takes priority over optimization.
 ## Current state
 
 Milestones 1 through 5 are complete, including the full RV32IM instruction set
-and static ELF32 loading. The repository has:
+and static ELF32 loading. Milestone 6 has begun with a shared program-session
+foundation. The repository has:
 
 - C++20/CMake project scaffolding
 - a reusable `rvemu::core` library
@@ -54,14 +55,22 @@ and static ELF32 loading. The repository has:
   fill, executable entry-point initialization, and all-or-nothing failure
 - typed ELF load failures covering format, compatibility, bounds, alignment,
   ordering, overlap, entry point, and file-I/O problems
+- `ProgramSession`, which delegates normal execution to `ExecutionEngine` and
+  dispatches precise user environment-call traps through an injected handler
+- RV32 Linux-style environment-call capture from `a7` and `a0` through `a5`
+- explicit resume, exit, and unhandled call outcomes with precise register and
+  PC effects
+- separate guest-step, instruction-retirement, and handled-call statistics
+- pre-execution host breakpoints that do not modify guest memory
 - GoogleTest unit tests
 - optional AddressSanitizer and UndefinedBehaviorSanitizer support
 - GCC and Clang GitHub Actions CI
 - a pinned GoogleTest source dependency by default, avoiding host-package ABI
   mismatches; `RVEMU_USE_SYSTEM_GTEST=ON` is an explicit opt-in
 
-RV32IM and the static ELF loader are complete. There is no command-line
-executable, syscall layer, debugger, performance model, or benchmark suite yet.
+RV32IM, the static ELF loader, and the shared program-session contract are
+complete. There is no concrete syscall handler, command-line executable,
+interactive debugger, performance model, or benchmark suite yet.
 
 ## Architecture and directory structure
 
@@ -71,11 +80,13 @@ include/rvemu/elf_loader.hpp Public ELF load results and file/span loader APIs
 include/rvemu/instruction.hpp Public decoded-instruction types and decoder
 include/rvemu/execution_engine.hpp Public trap, result, and execution-loop API
 include/rvemu/memory.hpp     Public checked-memory API and error types
+include/rvemu/program_session.hpp Public hosted-run and environment-call API
 src/cpu_state.cpp            CPU-state implementation
 src/elf_loader.cpp           ELF32 parsing, validation, and transactional load
 src/instruction.cpp          Format decoding and immediate reconstruction
 src/execution_engine.cpp     Fetch, current ISA execution, step, and bounded run
 src/memory.cpp               Little-endian memory implementation
+src/program_session.cpp      Hosted execution, call dispatch, and breakpoints
 tests/                       Focused GoogleTest unit tests
 cmake/ProjectOptions.cmake   Warnings, C++20, and sanitizer settings
 .github/workflows/ci.yml     GCC/Clang sanitizer CI
@@ -180,6 +191,30 @@ The CMake library target is `rvemu_core`, with the namespaced alias
   `IllegalInstruction` until implemented.
 - `run()` always takes a strict instruction limit. This makes tests deterministic
   and prevents an accidental unbounded host loop.
+- `ProgramSession` is a host-policy layer above `ExecutionEngine`; do not move
+  syscall behavior into instruction execution. Normal instructions and
+  non-`ECALL` traps must preserve the existing engine semantics.
+- Capture a user environment call only after an exact
+  `EnvironmentCallFromUserMode` trap. Snapshot `a7` as its number and `a0`
+  through `a5` as its six arguments before invoking the handler.
+- Environment-call handlers receive `const Memory&`. Current output and exit
+  policies do not require guest mutation, and keeping the view read-only avoids
+  hidden partial state changes on a failed call.
+- A resumed call writes only its result to `a0` and advances the precise trap PC
+  by four using architectural wraparound. An exit or unhandled decision leaves
+  CPU and memory state at the trapping `ECALL`; the event preserves the original
+  call snapshot.
+- A session guest step is one retired instruction, one resumed environment
+  call, or one terminating environment call. Keep guest steps, architectural
+  retirement, and handled-call counts separate so future performance models do
+  not treat host-handled `ECALL`s as retired CPU instructions.
+- Session breakpoints are host-side PC addresses checked before execution. They
+  must not patch guest memory. `step()` bypasses breakpoints so a debugger can
+  deliberately advance after stopping.
+- The supported generated-code target is little-endian RV32IM, `IALIGN=32`, and
+  the ILP32 soft-float ABI. Compile fixtures explicitly with
+  `-march=rv32im -mabi=ilp32`; do not let default RVC or floating-point targets
+  silently enter tests.
 - The ELF loader supports fixed-address, 32-bit, little-endian RISC-V `ET_EXEC`
   files. It intentionally rejects `ET_DYN`; load bias, dynamic relocations, and
   an interpreter are not modeled.
@@ -294,19 +329,35 @@ Completed:
   little-endian parsing, strict RISC-V compatibility checks, widened range
   validation, `PT_LOAD` copy/zero-fill behavior, entry-point setup, typed
   failures, transactional state guarantees, and execution integration tests.
+- Milestone 6a: a shared `ProgramSession` above the unchanged execution engine,
+  with Linux-style call capture, explicit resume/exit/unhandled transitions,
+  separate accounting, strict run limits, host breakpoints, and focused tests.
 
 Next milestone:
 
-- Add a small user-level syscall environment that consumes precise `ECALL`
-  traps without changing core instruction semantics.
-- Begin with deterministic program termination and byte/string output through
-  an injectable host-I/O interface so tests do not depend on process-global
-  stdout.
-- Define supported syscall numbers and register conventions explicitly, test
-  invalid guest pointers and unsupported calls, and preserve precise state on
-  failures.
-- Add a minimal executable frontend once programs can produce output and exit.
+- Implement the concrete RV32 Linux-style calls `write` (64), `exit` (93), and
+  `exit_group` (94) above `ProgramSession`.
+- Route output through an injectable byte sink, validate the complete guest
+  address range before emitting any bytes, and return deterministic Linux-style
+  error values for unsupported calls or bad arguments.
+- Add a deliberately minimal 16-byte-aligned stack initializer for freestanding
+  RV32IM/ILP32 programs, then a command-line executable that loads, runs,
+  reports traps, and returns the guest exit status.
+- In parallel, integrate a small non-privileged RV32I/M ACT 4 conformance smoke
+  suite. Start from the `sail-RVI20U32` configuration with privileged tests
+  disabled and pin the architecture-test, Sail, compiler, configuration, macro,
+  and linker inputs. Curated aligned nontrapping tests belong in pull-request
+  CI; broader generated coverage can run on a scheduled or manual job.
+- The initial ACT 4 audit used `riscv-arch-test` commit
+  `585fbaf97a7df6e2f0fe8808edd3ad839eb1afe3`, Sail 0.12, and the documented
+  GCC 15/binutils 2.44 toolchain as its reproducibility baseline. Prefer the
+  official container by immutable digest when implementing the harness, and
+  record every pinned input rather than relying on moving tags.
+- Do not claim full `riscv-arch-test` coverage while CSR, privilege, and trap
+  handler state are absent. Keep RVC, floating point, atomics, and other
+  unsupported extensions out of the initial test selection.
 - Update both documentation files, validate, commit, and push.
 
-After syscalls and a frontend: interactive debugging, cache/branch models,
-reproducible benchmarks, and differential testing.
+After the concrete runtime, CLI, and initial conformance pass: interactive
+debugging, cache/branch models, reproducible benchmarks, and expanded
+differential testing against Sail, QEMU, or Spike.

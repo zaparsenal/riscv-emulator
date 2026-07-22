@@ -31,6 +31,7 @@ add_executable(rvemu_tests
   memory_test.cpp
   memory_instructions_test.cpp
   m_extension_instructions_test.cpp
+  program_session_test.cpp
   register_instructions_test.cpp
   system_instructions_test.cpp
 )

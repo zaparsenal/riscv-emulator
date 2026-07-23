@@ -19,6 +19,7 @@ add_library(rvemu_core
   src/instruction.cpp
   src/linux_syscalls.cpp
   src/memory.cpp
+  src/performance_analyzer.cpp
   src/program_session.cpp
   src/stack.cpp
 )

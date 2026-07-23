@@ -57,6 +57,9 @@ milestones are complete:
 - configurable always-taken, always-not-taken, and PC-indexed two-bit bimodal
   conditional-branch predictors with deterministic reset and raw accuracy
   counters
+- one `PerformanceAnalyzer` observer that owns both models, forwards every
+  completed instruction once, resets them together, and returns one combined
+  statistics snapshot
 - loading from either an in-memory byte span or an ELF file path
 - explicit parsing of fixed-address, 32-bit, little-endian RISC-V executables
 - complete prevalidation of ELF and program headers before architectural state
@@ -108,8 +111,7 @@ milestones are complete:
 RV32IM execution, static ELF32 loading, the shared program session, minimal
 output/termination syscalls, freestanding stack setup, and the command-line
 runner are complete. There is currently no full process-startup stack,
-combined performance analyzer, cycle model, benchmark harness, or published
-performance result.
+cycle model, benchmark harness, or published performance result.
 
 The ACT 4 smoke runner and reproducible generation/audit harness are also
 present, but no official ACT result is claimed. The pinned environment generated
@@ -192,6 +194,9 @@ command-line executable:
 - `BranchPredictorModel` consumes resolved conditional-branch outcomes. It
   supports two static strategies and a configurable two-bit bimodal table while
   ignoring direct and indirect jumps.
+- `PerformanceAnalyzer` is the single observer-facing owner of both models. It
+  preserves their independent state machines and exposes combined
+  configuration, reset, and statistics operations.
 
 Execution computes pending effects before committing them. A misaligned taken
 jump or branch therefore traps at the control-transfer instruction without
@@ -338,6 +343,25 @@ Statistics expose integer predictions, correct and incorrect results, predicted
 taken/not-taken counts, and actual taken/not-taken counts. `reset()` clears all
 statistics and restores every dynamic counter to the configured initial state.
 These values do not assign misprediction penalties or estimated cycles.
+
+## Combined performance analysis
+
+`PerformanceAnalyzer` owns one `SplitCacheModel` and one
+`BranchPredictorModel`. Its configuration embeds both existing configurations,
+so invalid cache geometry still raises `CacheConfigurationError` and invalid
+predictor settings still raise `BranchPredictorConfigurationError`.
+
+Each completed `ExecutionObservation` is forwarded exactly once to both owned
+models, then counted as one observed instruction. `statistics()` returns that
+instruction count together with complete cache and branch-prediction snapshots.
+`reset()` simultaneously returns both models to their configured cold/initial
+state and clears the combined instruction count.
+
+The analyzer can be passed directly to `ExecutionEngine` or `ProgramSession` as
+their optional observer. Because observations represent retired instructions,
+host-handled environment calls do not enter the analyzer even though they remain
+session guest steps. The combined owner still assigns no cycle costs and is not
+enabled by the CLI yet.
 
 ## ELF loading
 
@@ -572,9 +596,9 @@ does not reset registers or clear unrelated memory.
    by spurious RVC flags and CSR-based ACT failure diagnostics.
 8. **Complete:** add an initial interactive debugger with breakpoints,
    single-stepping, register display, and checked memory inspection.
-9. **In progress:** the observation contract, configurable split-cache model,
-   and static/two-bit branch-prediction models are complete; next converge them
-   behind one performance-analysis owner before defining cycle policy.
+9. **In progress:** the observation contract, configurable split-cache and
+   branch-prediction models, and their combined analysis owner are complete;
+   next define an explicit configurable cycle-cost policy.
 10. Add reproducible workloads and report only measured benchmark results.
 11. Expand differential validation against Sail, QEMU, or Spike where each is
     practical.
@@ -622,6 +646,8 @@ does not reset registers or clear unrelated memory.
 - The branch predictor models conditional direction only. It has no target
   prediction, branch-target buffer, global/local history, tournament selection,
   return-address stack, or misprediction-cycle penalty.
+- The combined analyzer is a library API only. The CLI does not configure or
+  report it yet, and no cycle estimate or measured performance result exists.
 - ACT generated all 47 selected non-privileged RV32I/M ELFs, but the audit
   correctly blocks execution because every file is RVC-flagged and contains
   three CSR reads in its failure path. No architectural conformance result is

@@ -40,6 +40,9 @@ complete. The repository has:
 - `BranchPredictorModel` with validated always-taken, always-not-taken, and
   PC-indexed two-bit bimodal strategies, deterministic reset, and raw
   conditional-direction accuracy statistics
+- `PerformanceAnalyzer`, the single observer owner that composes cache and
+  predictor configuration, forwards each completed event once, resets both
+  models together, and returns a combined raw statistics snapshot
 - tested execution of `LUI`, `AUIPC`, `ADDI`, `SLTI`, `SLTIU`, `XORI`, `ORI`,
   `ANDI`, `SLLI`, `SRLI`, `SRAI`, `ADD`, `SUB`, `SLL`, `SLT`, `SLTU`, `XOR`,
   `SRL`, `SRA`, `OR`, `AND`, `JAL`, `JALR`, `BEQ`, `BNE`, `BLT`, `BGE`,
@@ -102,8 +105,7 @@ complete. The repository has:
 RV32IM, the static ELF loader, shared program-session contract, minimal
 output/termination syscalls, freestanding stack initializer, and command-line
 runner are complete. There is no full process-startup image, interactive
-debugger beyond the initial command set, combined performance analyzer, cycle
-model, or benchmark suite yet.
+debugger beyond the initial command set, cycle model, or benchmark suite yet.
 
 The ACT 4 harness generated all 47 selected non-privileged RV32I/M ELFs from
 Sail results, but it is not a conformance result. The compatibility audit stops
@@ -122,6 +124,7 @@ include/rvemu/execution_engine.hpp Public trap, result, and execution-loop API
 include/rvemu/execution_observation.hpp Public completed-instruction event API
 include/rvemu/linux_syscalls.hpp Public output sink and hosted Linux-call API
 include/rvemu/memory.hpp     Public checked-memory API and error types
+include/rvemu/performance_analyzer.hpp Public combined model owner and snapshot
 include/rvemu/program_session.hpp Public hosted-run and environment-call API
 include/rvemu/stack.hpp      Public freestanding stack-initialization API
 app/rvemu_cli.hpp            Testable command-line and hosted-run API
@@ -141,6 +144,7 @@ src/instruction.cpp          Format decoding and immediate reconstruction
 src/execution_engine.cpp     Fetch, current ISA execution, step, and bounded run
 src/linux_syscalls.cpp       Hosted write/exit syscall policy and validation
 src/memory.cpp               Little-endian memory implementation
+src/performance_analyzer.cpp Combined cache/predictor observation owner
 src/program_session.cpp      Hosted execution, call dispatch, and breakpoints
 src/stack.cpp                Checked 16-byte-aligned stack placement
 tests/                       Focused GoogleTest unit tests
@@ -303,6 +307,19 @@ frontend policy, and the `rvemu_cli` target produces the `rvemu` executable.
   totals as raw integers without assigning a penalty.
 - Predictor `reset()` restores the configured initial counter in every table
   entry and zeroes every statistic. Static reset only clears statistics.
+- `PerformanceAnalyzer` is the only combined observer owner. It embeds the
+  existing cache and predictor configurations, constructs the existing model
+  classes, and propagates their typed configuration failures without wrapping
+  or weakening them.
+- Forward each completed observation exactly once to both owned models, then
+  increment the combined observed-instruction counter. Do not duplicate cache
+  or predictor state transitions in the analyzer.
+- A combined statistics snapshot contains the observed-instruction count and
+  complete value snapshots from both models. Its instruction count must match
+  the instruction-cache access count under the completed-event contract.
+- Combined `reset()` delegates to both models and zeros the instruction count.
+  It assigns no cycle costs and must remain independent of session guest-step
+  accounting, which also includes host-handled environment calls.
 - `ProgramSession` is a host-policy layer above `ExecutionEngine`; do not move
   syscall behavior into instruction execution. Normal instructions and
   non-`ECALL` traps must preserve the existing engine semantics.
@@ -585,15 +602,18 @@ Completed:
   deterministic PC-word indexing and saturating updates, reset behavior, raw
   direction-accuracy statistics, jump exclusion, and execution-observer
   integration.
+- Milestone 9d: a single combined performance-analyzer observer with nested
+  configuration, exact fan-out to the independent cache/predictor models,
+  unified reset, typed failure propagation, and consistent raw snapshots.
 
 Next milestone:
 
-- Converge the stable cache and branch models behind one `ExecutionObserver`
-  owner with a combined configuration, reset operation, and statistics snapshot.
-  Preserve the independent models and do not duplicate their state machines.
-- Define cycle-cost policy only after the combined ownership boundary is tested.
-  Keep every cost configurable and every formula explicit; do not publish
-  performance figures before the benchmark harness measures them.
+- Define a validated cycle-cost policy on top of combined raw statistics. Keep
+  base retired-instruction cost, instruction/data miss penalties, and branch
+  misprediction penalty explicit and configurable, with checked arithmetic and
+  a documented formula.
+- Do not present a configured estimate as a measured performance result. CLI
+  reporting and reproducible benchmarks remain separate later milestones.
 - Remove ACT's spurious RVC flag and CSR-based failure diagnostics at generation
   time without weakening rvemu's loader or execution target. Then rerun the
   complete 47-file audit, execute the ten-file smoke subset, and add it to CI

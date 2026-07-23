@@ -23,6 +23,7 @@ endif()
 
 add_executable(rvemu_tests
   act_smoke_test.cpp
+  benchmark_workload_test.cpp
   branch_predictor_test.cpp
   cache_model_test.cpp
   control_flow_instructions_test.cpp
@@ -50,6 +51,7 @@ target_link_libraries(
   PRIVATE
     rvemu::core
     rvemu::act_smoke_support
+    rvemu::benchmark_support
     rvemu::cli_support
     rvemu_project_options
     GTest::gtest_main

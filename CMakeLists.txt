@@ -90,6 +90,67 @@ if(RVEMU_BUILD_ACT_SMOKE_RUNNER OR BUILD_TESTING)
   )
 endif()
 
+option(
+  RVEMU_BUILD_BENCHMARKS
+  "Build the reproducible RV32IM benchmark harness"
+  OFF
+)
+
+if(RVEMU_BUILD_BENCHMARKS OR BUILD_TESTING)
+  add_library(rvemu_benchmark_support STATIC
+    benchmarks/benchmark_workload.cpp
+  )
+  add_library(rvemu::benchmark_support ALIAS rvemu_benchmark_support)
+  target_include_directories(rvemu_benchmark_support PUBLIC benchmarks)
+  target_link_libraries(
+    rvemu_benchmark_support
+    PUBLIC rvemu::core
+    PRIVATE rvemu_project_options
+  )
+endif()
+
+if(RVEMU_BUILD_BENCHMARKS)
+  option(
+    RVEMU_USE_SYSTEM_BENCHMARK
+    "Use an installed Google Benchmark package"
+    OFF
+  )
+
+  if(RVEMU_USE_SYSTEM_BENCHMARK)
+    find_package(benchmark CONFIG REQUIRED)
+  else()
+    include(FetchContent)
+    set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+    set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
+    set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+      googlebenchmark
+      GIT_REPOSITORY https://github.com/google/benchmark.git
+      GIT_TAG 192ef10025eb2c4cdd392bc502f0c852196baa48
+      GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(googlebenchmark)
+  endif()
+
+  add_executable(rvemu_benchmarks
+    benchmarks/rvemu_benchmarks.cpp
+  )
+  target_link_libraries(
+    rvemu_benchmarks
+    PRIVATE
+      rvemu::benchmark_support
+      benchmark::benchmark
+      rvemu_project_options
+  )
+
+  if(BUILD_TESTING)
+    add_test(
+      NAME rvemu_benchmarks_smoke
+      COMMAND rvemu_benchmarks --benchmark_dry_run
+    )
+  endif()
+endif()
+
 if(BUILD_TESTING)
   add_subdirectory(tests)
 endif()

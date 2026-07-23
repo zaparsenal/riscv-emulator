@@ -47,6 +47,10 @@ complete. The repository has:
 - `CycleEstimator` with explicit base-instruction, instruction/data miss, and
   branch-misprediction costs, separate result components, and typed overflow
   failures
+- `BenchmarkWorkload` with deterministic integer, memory-stride, and patterned
+  branch programs, exact bounded execution, cold reset, and model snapshots
+- an optional `rvemu_benchmarks` executable using pinned Google Benchmark 1.9.5
+  to report measured throughput separately from raw counters and cycle estimates
 - tested execution of `LUI`, `AUIPC`, `ADDI`, `SLTI`, `SLTIU`, `XORI`, `ORI`,
   `ANDI`, `SLLI`, `SRLI`, `SRAI`, `ADD`, `SUB`, `SLL`, `SLT`, `SLTU`, `XOR`,
   `SRL`, `SRA`, `OR`, `AND`, `JAL`, `JALR`, `BEQ`, `BNE`, `BLT`, `BGE`,
@@ -103,14 +107,17 @@ complete. The repository has:
 - GoogleTest unit tests
 - optional AddressSanitizer and UndefinedBehaviorSanitizer support
 - GCC and Clang GitHub Actions CI
+- a release benchmark build and deterministic one-iteration CI smoke run
 - a pinned GoogleTest source dependency by default, avoiding host-package ABI
   mismatches; `RVEMU_USE_SYSTEM_GTEST=ON` is an explicit opt-in
+- a pinned Google Benchmark source dependency when benchmarks are enabled;
+  `RVEMU_USE_SYSTEM_BENCHMARK=ON` is an explicit opt-in
 
 RV32IM, the static ELF loader, shared program-session contract, minimal
 output/termination syscalls, freestanding stack initializer, and command-line
 runner are complete. There is no full process-startup image, interactive
-debugger beyond the initial command set, CLI performance report, or benchmark
-suite yet.
+debugger beyond the initial command set, CLI performance report, or published
+cross-machine benchmark baseline.
 
 The ACT 4 harness generated all 47 selected non-privileged RV32I/M ELFs from
 Sail results, but it is not a conformance result. The compatibility audit stops
@@ -138,6 +145,9 @@ app/rvemu_cli.cpp            Parsing, stream output, orchestration, diagnostics
 app/rvemu_main.cpp           Process entry point and exception boundary
 app/rvemu_debugger.hpp       Interactive debugger result and command-loop API
 app/rvemu_debugger.cpp       Breakpoints, stepping, and state inspection
+benchmarks/benchmark_workload.hpp Deterministic workload support API
+benchmarks/benchmark_workload.cpp Fixed RV32IM programs and reset/run behavior
+benchmarks/rvemu_benchmarks.cpp Google Benchmark timing and metric reporting
 tools/act_smoke.hpp         Typed self-checking ELF smoke-runner API
 tools/act_smoke.cpp         ACT load, execution, and result classification
 tools/act_smoke_main.cpp    `rvemu-act-smoke` reporting executable
@@ -163,6 +173,9 @@ README.md                    Human-facing project documentation
 The CMake library target is `rvemu_core`, with the namespaced alias
 `rvemu::core`. `rvemu_cli_support` (`rvemu::cli_support`) contains the testable
 frontend policy, and the `rvemu_cli` target produces the `rvemu` executable.
+`rvemu_benchmark_support` (`rvemu::benchmark_support`) contains deterministic
+workload setup independently of Google Benchmark. `rvemu_benchmarks` is built
+only when `RVEMU_BUILD_BENCHMARKS=ON`.
 
 ## Design decisions
 
@@ -346,6 +359,30 @@ frontend policy, and the `rvemu_cli` target produces the `rvemu` executable.
 - A cycle estimate is a deterministic result of configured assumptions, not a
   measured performance result. Traps and hosted calls are excluded because
   they emit no completed instruction observation.
+- Benchmark workloads are fixed synthetic programs, not dynamically loaded
+  ELFs. Each measured iteration resets CPU, memory, cache, predictor, and
+  statistics outside the timed region, then runs exactly 65,536 instructions.
+  Trapping or failing to reach that limit is a benchmark error.
+- The fixed model configuration is split 4096-byte, 64-byte-line, two-way
+  instruction/data caches; a 256-entry bimodal predictor initially weakly not
+  taken; and cycle costs 1/10/20/5 for base, instruction miss, data miss, and
+  branch misprediction respectively. Change these values only as an explicit,
+  documented benchmark-contract revision.
+- `IntegerMix` exercises immediate/register integer operations, RV32M
+  multiplication, and a direct loop. `MemoryStride` performs word load/store
+  traffic over a 1 KiB ascending range. `BranchPattern` combines alternating
+  branch outcomes with a mostly-taken loop.
+- Google Benchmark measures CPU-time throughput. Raw cache and predictor
+  counts, percentage rates, and estimated cycles describe the most recent
+  deterministic iteration. Keep setup and reporting outside timing.
+- Treat `guest_instructions_per_second` as a host measurement and
+  `estimated_cycles`/`estimated_cpi` as configured model outputs. Preserve the
+  benchmark JSON context and release build settings with any recorded result;
+  never hand-enter, extrapolate, or generalize measurements across machines.
+- Google Benchmark is pinned to version 1.9.5 commit
+  `192ef10025eb2c4cdd392bc502f0c852196baa48`. Standard builds must not download
+  it; fetch it only when `RVEMU_BUILD_BENCHMARKS=ON`, or honor the explicit
+  system-package opt-in.
 - `ProgramSession` is a host-policy layer above `ExecutionEngine`; do not move
   syscall behavior into instruction execution. Normal instructions and
   non-`ECALL` traps must preserve the existing engine semantics.
@@ -547,6 +584,20 @@ cmake -S . -B build-act \
 cmake --build build-act --parallel
 ```
 
+To build and run the release benchmark harness:
+
+```sh
+cmake -S . -B build-benchmarks \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTING=OFF \
+  -DRVEMU_BUILD_CLI=OFF \
+  -DRVEMU_BUILD_BENCHMARKS=ON
+cmake --build build-benchmarks --target rvemu_benchmarks --parallel
+build-benchmarks/rvemu_benchmarks \
+  --benchmark_min_time=1s \
+  --benchmark_repetitions=5
+```
+
 ## Workflow expectations
 
 Before editing, inspect the directory, Git status, current branch, configured
@@ -634,17 +685,13 @@ Completed:
 - Milestone 9e: a validated cycle-cost policy with explicit base and penalty
   inputs, separate estimate components, checked 64-bit multiplication and
   summation, typed overflow results, and combined-analyzer integration.
+- Milestone 10: three fixed, resettable RV32IM benchmark workloads; an
+  immutable Google Benchmark dependency; opt-in release build; measured
+  instruction-throughput reporting; raw cache/predictor counts and rates;
+  configured cycle/CPI output; deterministic workload tests; and a CI dry run.
 
 Next milestone:
 
-- Add a reproducible benchmark harness with fixed, documented RV32IM workloads
-  and explicit model configuration. Report framework-measured host throughput,
-  raw cache and branch statistics, and the configured cycle estimate without
-  conflating those categories.
-- Do not hand-enter or publish benchmark numbers. Record only values produced
-  by the harness in its observed environment, with enough workload, build, and
-  model configuration to reproduce them. CLI reporting remains a separate
-  later milestone.
 - Remove ACT's spurious RVC flag and CSR-based failure diagnostics at generation
   time without weakening rvemu's loader or execution target. Then rerun the
   complete 47-file audit, execute the ten-file smoke subset, and add it to CI
@@ -659,5 +706,5 @@ Next milestone:
   unsupported extensions out of the initial test selection.
 - Update both documentation files, validate, commit, and push.
 
-After the benchmark harness and initial conformance pass: CLI performance
-reporting and expanded differential testing against Sail, QEMU, or Spike.
+After the initial conformance pass: CLI performance reporting and expanded
+differential testing against Sail, QEMU, or Spike.

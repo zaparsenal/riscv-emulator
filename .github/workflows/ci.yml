@@ -36,3 +36,31 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  benchmark-smoke:
+    name: Benchmark harness smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Configure release benchmark build
+        run: >-
+          cmake -S . -B build-benchmarks
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=OFF
+          -DRVEMU_BUILD_CLI=OFF
+          -DRVEMU_BUILD_BENCHMARKS=ON
+
+      - name: Build benchmark harness
+        run: >-
+          cmake --build build-benchmarks
+          --target rvemu_benchmarks
+          --parallel 2
+
+      - name: Run deterministic smoke iteration
+        run: >-
+          ./build-benchmarks/rvemu_benchmarks
+          --benchmark_dry_run
+          --benchmark_format=json

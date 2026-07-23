@@ -62,6 +62,9 @@ milestones are complete:
   statistics snapshot
 - a configurable cycle-cost policy that derives separate base, instruction
   miss, data miss, and branch-misprediction components with checked arithmetic
+- three fixed RV32IM benchmark workloads and a Google Benchmark harness that
+  reports measured guest-instruction throughput, raw model counters, cache and
+  branch rates, and configured cycle estimates
 - loading from either an in-memory byte span or an ELF file path
 - explicit parsing of fixed-address, 32-bit, little-endian RISC-V executables
 - complete prevalidation of ELF and program headers before architectural state
@@ -106,14 +109,14 @@ milestones are complete:
   invalid guest output ranges, partial writes, sink failures, exit statuses,
   stack placement and nonmutation, command-line parsing, hosted ELF execution,
   execution-observation timing and classification, ACT runner pass/fail and
-  infrastructure classifications
+  infrastructure classifications, and deterministic benchmark workloads
 - optional AddressSanitizer and UndefinedBehaviorSanitizer instrumentation
-- GitHub Actions validation with GCC and Clang
+- GitHub Actions validation with GCC and Clang plus a release benchmark dry run
 
 RV32IM execution, static ELF32 loading, the shared program session, minimal
 output/termination syscalls, freestanding stack setup, and the command-line
 runner are complete. There is currently no full process-startup stack,
-benchmark harness, or published performance result.
+CLI performance report, or published cross-machine performance claim.
 
 The ACT 4 smoke runner and reproducible generation/audit harness are also
 present, but no official ACT result is claimed. The pinned environment generated
@@ -202,6 +205,9 @@ command-line executable:
 - `CycleEstimator` applies an explicit configured cost policy to raw event
   counts. It returns each cost component and their total, or a typed overflow
   result; it does not measure host execution time.
+- `BenchmarkWorkload` owns a resettable CPU, memory, and analyzer for one fixed
+  synthetic workload. The optional `rvemu_benchmarks` executable times only
+  bounded execution and reports host measurements separately from model data.
 
 Execution computes pending effects before committing them. A misaligned taken
 jump or branch therefore traps at the control-transfer instruction without
@@ -394,7 +400,72 @@ are never silently wrapped or saturated.
 
 This is a model estimate under the caller's chosen assumptions, not elapsed
 time, hardware timing, or benchmark evidence. The CLI does not configure or
-report the analyzer yet, and no performance result is published.
+report the analyzer yet.
+
+## Reproducible benchmarks
+
+The optional `rvemu_benchmarks` executable uses Google Benchmark 1.9.5, pinned
+to commit `192ef10025eb2c4cdd392bc502f0c852196baa48`. It contains three
+deterministic, synthetic RV32IM workloads:
+
+- `IntegerMix`: integer-immediate, register ALU, multiply, and direct-jump work
+- `MemoryStride`: repeated word loads and stores over a 1 KiB ascending range
+- `BranchPattern`: an alternating conditional branch plus a mostly-taken loop
+
+Every measured iteration starts from reset CPU and memory state and cold cache
+and predictor models. Setup and result validation occur while timing is paused;
+the timed region is exactly one bounded execution of 65,536 guest instructions.
+The harness uses one documented model configuration:
+
+| Model input | Value |
+| --- | ---: |
+| Instruction cache | 4096 bytes, 64-byte lines, 2-way |
+| Data cache | 4096 bytes, 64-byte lines, 2-way |
+| Branch predictor | 256-entry bimodal, weakly not taken |
+| Base instruction cost | 1 cycle |
+| Instruction-cache miss penalty | 10 cycles |
+| Data-cache miss penalty | 20 cycles |
+| Branch-misprediction penalty | 5 cycles |
+
+Each result reports Google Benchmark's measured
+`guest_instructions_per_second`, raw instruction/data-cache and branch counts,
+cache hit percentages, branch accuracy, `estimated_cycles`, and
+`estimated_cpi`. A zero percentage with zero corresponding accesses or
+predictions means that the workload produced no eligible event. Estimated
+cycles remain model output; only the throughput field is a host timing
+measurement.
+
+Build and run a release benchmark:
+
+```sh
+cmake -S . -B build-benchmarks \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTING=OFF \
+  -DRVEMU_BUILD_CLI=OFF \
+  -DRVEMU_BUILD_BENCHMARKS=ON
+cmake --build build-benchmarks --target rvemu_benchmarks --parallel
+build-benchmarks/rvemu_benchmarks \
+  --benchmark_min_time=1s \
+  --benchmark_repetitions=5 \
+  --benchmark_report_aggregates_only=true \
+  --benchmark_counters_tabular=true
+```
+
+To retain a machine-readable measurement together with Google Benchmark's
+machine, compiler, library, and rvemu model context:
+
+```sh
+build-benchmarks/rvemu_benchmarks \
+  --benchmark_min_time=1s \
+  --benchmark_repetitions=5 \
+  --benchmark_report_aggregates_only=true \
+  --benchmark_out=rvemu-benchmark-results.json \
+  --benchmark_out_format=json
+```
+
+`-DRVEMU_USE_SYSTEM_BENCHMARK=ON` selects an ABI-compatible installed package.
+Do not compare sanitizer or debug builds with release results, and do not treat
+one machine's measured throughput as a portable emulator guarantee.
 
 ## ELF loading
 
@@ -510,6 +581,7 @@ pins, audit evidence, and exact boundary.
 .
 ├── .github/workflows/ci.yml  # GCC/Clang sanitizer CI
 ├── app/                      # CLI, interactive debugger, and process entry
+├── benchmarks/               # Fixed workloads and optional benchmark harness
 ├── cmake/                    # Shared compiler and sanitizer options
 ├── conformance/act4/         # Pinned ACT 4 smoke inputs and limitations
 ├── include/rvemu/            # Public C++ interfaces
@@ -529,6 +601,10 @@ pins, audit evidence, and exact boundary.
 GoogleTest 1.15.2 is fetched and built by default for reproducibility. An
 ABI-compatible installed package can be selected explicitly with
 `-DRVEMU_USE_SYSTEM_GTEST=ON`.
+
+Google Benchmark is needed only with `RVEMU_BUILD_BENCHMARKS=ON`. Version 1.9.5
+is fetched from an immutable commit by default; an installed package may be
+selected with `-DRVEMU_USE_SYSTEM_BENCHMARK=ON`.
 
 ## Build and test
 
@@ -632,11 +708,11 @@ does not reset registers or clear unrelated memory.
 9. **Complete:** the observation contract, configurable split-cache and
    branch-prediction models, combined analysis owner, and overflow-safe,
    configurable cycle-cost policy.
-10. **Next:** add reproducible workloads and a benchmark harness that reports
-    measured host throughput alongside raw model counters and configured cycle
-    estimates.
-11. Expand differential validation against Sail, QEMU, or Spike where each is
-    practical.
+10. **Complete:** three deterministic RV32IM workloads and a pinned Google
+    Benchmark harness reporting measured host throughput, raw cache/predictor
+    statistics, hit/accuracy rates, and configured cycle estimates.
+11. **Next:** complete the initial ACT smoke pass, then expand differential
+    validation against Sail, QEMU, or Spike where practical.
 
 ## Current limitations
 
@@ -686,9 +762,13 @@ does not reset registers or clear unrelated memory.
 - The combined analyzer is a library API only. The CLI does not configure or
   report it yet. Its cycle count is a configured estimate, not a measured
   performance result.
+- The benchmark workloads are synthetic microbenchmarks, not application
+  suites. Host throughput varies with hardware, operating-system load, compiler,
+  build flags, and benchmark settings; no portable performance guarantee is
+  claimed.
 - ACT generated all 47 selected non-privileged RV32I/M ELFs, but the audit
   correctly blocks execution because every file is RVC-flagged and contains
   three CSR reads in its failure path. No architectural conformance result is
   published yet.
-- There is no benchmark harness and there are no performance claims or measured
-  results yet.
+- No benchmark baseline is checked in and no cross-machine performance claim is
+  made. Measurements are produced by the harness in their observed environment.

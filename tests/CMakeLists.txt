@@ -23,6 +23,7 @@ endif()
 
 add_executable(rvemu_tests
   act_smoke_test.cpp
+  branch_predictor_test.cpp
   cache_model_test.cpp
   control_flow_instructions_test.cpp
   cpu_state_test.cpp

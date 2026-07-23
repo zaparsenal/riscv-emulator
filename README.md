@@ -54,6 +54,9 @@ milestones are complete:
 - configurable split instruction/data caches with validated geometry,
   deterministic set-associative LRU replacement, cold reset, and separate raw
   instruction, load, and store hit/miss statistics
+- configurable always-taken, always-not-taken, and PC-indexed two-bit bimodal
+  conditional-branch predictors with deterministic reset and raw accuracy
+  counters
 - loading from either an in-memory byte span or an ELF file path
 - explicit parsing of fixed-address, 32-bit, little-endian RISC-V executables
 - complete prevalidation of ELF and program headers before architectural state
@@ -105,8 +108,8 @@ milestones are complete:
 RV32IM execution, static ELF32 loading, the shared program session, minimal
 output/termination syscalls, freestanding stack setup, and the command-line
 runner are complete. There is currently no full process-startup stack,
-branch-prediction or cycle model, benchmark harness, or published performance
-result.
+combined performance analyzer, cycle model, benchmark harness, or published
+performance result.
 
 The ACT 4 smoke runner and reproducible generation/audit harness are also
 present, but no official ACT result is claimed. The pinned environment generated
@@ -186,6 +189,9 @@ command-line executable:
 - `SplitCacheModel` consumes completed observations without accessing mutable
   architectural state. It models independent instruction and data caches and
   reports raw counters without assigning latency or estimated cycles.
+- `BranchPredictorModel` consumes resolved conditional-branch outcomes. It
+  supports two static strategies and a configurable two-bit bimodal table while
+  ignoring direct and indirect jumps.
 
 Execution computes pending effects before committing them. A misaligned taken
 jump or branch therefore traps at the control-transfer instruction without
@@ -309,6 +315,29 @@ access performs one data-cache lookup. Statistics expose integer accesses,
 hits, and misses for instruction traffic, all data traffic, loads, and stores.
 No floating-point rates, latency, write policy, memory hierarchy, or cycle
 formula is implied by these counters.
+
+## Branch-prediction model
+
+`BranchPredictorModel` predicts only completed conditional branches. Direct
+`JAL` and indirect `JALR` observations are intentionally excluded because this
+first model has no branch-target buffer or return-address stack.
+
+Three strategies are available:
+
+- `AlwaysNotTaken`
+- `AlwaysTaken`
+- `BimodalTwoBit`, indexed by `(PC >> 2) & (entries - 1)`
+
+Static strategies require zero table entries. The bimodal table requires a
+positive power-of-two entry count and an explicit valid initial two-bit state.
+Its counters predict not-taken in the strongly/weakly-not-taken states and
+taken in the weakly/strongly-taken states. Each branch is predicted before its
+counter moves one saturating step toward the resolved outcome.
+
+Statistics expose integer predictions, correct and incorrect results, predicted
+taken/not-taken counts, and actual taken/not-taken counts. `reset()` clears all
+statistics and restores every dynamic counter to the configured initial state.
+These values do not assign misprediction penalties or estimated cycles.
 
 ## ELF loading
 
@@ -543,9 +572,9 @@ does not reset registers or clear unrelated memory.
    by spurious RVC flags and CSR-based ACT failure diagnostics.
 8. **Complete:** add an initial interactive debugger with breakpoints,
    single-stepping, register display, and checked memory inspection.
-9. **In progress:** the shared completed-instruction observation contract and
-   configurable split-cache consumer are complete; next add branch-prediction
-   consumers without changing architectural execution.
+9. **In progress:** the observation contract, configurable split-cache model,
+   and static/two-bit branch-prediction models are complete; next converge them
+   behind one performance-analysis owner before defining cycle policy.
 10. Add reproducible workloads and report only measured benchmark results.
 11. Expand differential validation against Sail, QEMU, or Spike where each is
     practical.
@@ -590,6 +619,9 @@ does not reset registers or clear unrelated memory.
 - The cache model represents separate first-level instruction and data caches
   only. It does not yet model write policies, lower cache levels, coherence,
   devices, prefetching, access latency, or estimated cycles.
+- The branch predictor models conditional direction only. It has no target
+  prediction, branch-target buffer, global/local history, tournament selection,
+  return-address stack, or misprediction-cycle penalty.
 - ACT generated all 47 selected non-privileged RV32I/M ELFs, but the audit
   correctly blocks execution because every file is RVC-flagged and contains
   three CSR reads in its failure path. No architectural conformance result is

@@ -37,6 +37,9 @@ complete. The repository has:
 - `SplitCacheModel` with validated independent instruction/data geometry,
   deterministic set-associative LRU state, cold reset, and raw instruction,
   load, and store hit/miss statistics
+- `BranchPredictorModel` with validated always-taken, always-not-taken, and
+  PC-indexed two-bit bimodal strategies, deterministic reset, and raw
+  conditional-direction accuracy statistics
 - tested execution of `LUI`, `AUIPC`, `ADDI`, `SLTI`, `SLTIU`, `XORI`, `ORI`,
   `ANDI`, `SLLI`, `SRLI`, `SRAI`, `ADD`, `SUB`, `SLL`, `SLT`, `SLTU`, `XOR`,
   `SRL`, `SRA`, `OR`, `AND`, `JAL`, `JALR`, `BEQ`, `BNE`, `BLT`, `BGE`,
@@ -99,8 +102,8 @@ complete. The repository has:
 RV32IM, the static ELF loader, shared program-session contract, minimal
 output/termination syscalls, freestanding stack initializer, and command-line
 runner are complete. There is no full process-startup image, interactive
-debugger beyond the initial command set, branch-prediction or cycle model, or
-benchmark suite yet.
+debugger beyond the initial command set, combined performance analyzer, cycle
+model, or benchmark suite yet.
 
 The ACT 4 harness generated all 47 selected non-privileged RV32I/M ELFs from
 Sail results, but it is not a conformance result. The compatibility audit stops
@@ -111,6 +114,7 @@ three unsupported CSR reads in ACT's failure-diagnostic path.
 
 ```text
 include/rvemu/cpu_state.hpp  Public CPU-state API
+include/rvemu/branch_predictor.hpp Public predictor configuration and statistics
 include/rvemu/cache_model.hpp Public cache configuration, state, and statistics
 include/rvemu/elf_loader.hpp Public ELF load results and file/span loader APIs
 include/rvemu/instruction.hpp Public decoded-instruction types and decoder
@@ -130,6 +134,7 @@ tools/act_smoke.cpp         ACT load, execution, and result classification
 tools/act_smoke_main.cpp    `rvemu-act-smoke` reporting executable
 conformance/act4/           Pinned ACT inputs, macros, linker, and manifest
 src/cpu_state.cpp            CPU-state implementation
+src/branch_predictor.cpp     Static and two-bit observation consumers
 src/cache_model.cpp          Set-associative LRU and split-cache observation
 src/elf_loader.cpp           ELF32 parsing, validation, and transactional load
 src/instruction.cpp          Format decoding and immediate reconstruction
@@ -284,6 +289,20 @@ frontend policy, and the `rvemu_cli` target produces the `rvemu` executable.
 - Cache `reset()` must invalidate every line and zero every counter. Raw integer
   statistics carry no latency, hit-rate rounding, write policy, cycle estimate,
   or performance claim.
+- `BranchPredictorConfiguration` selects always-not-taken, always-taken, or a
+  bimodal two-bit table. Static strategies require zero table entries. Bimodal
+  entry counts must be positive powers of two, and every strategy requires a
+  valid two-bit initial counter even when a static predictor ignores it.
+- Index bimodal counters with `(program_counter >> 2) & (entry_count - 1)`.
+  Predict not-taken for counter states 0 and 1, taken for states 2 and 3, then
+  move one saturating step toward the actual outcome. Prediction must precede
+  update.
+- Branch direction statistics cover only `ConditionalBranch` observations.
+  Ignore direct and indirect jumps until a target-prediction contract exists.
+  Maintain prediction, correctness, predicted-direction, and actual-direction
+  totals as raw integers without assigning a penalty.
+- Predictor `reset()` restores the configured initial counter in every table
+  entry and zeroes every statistic. Static reset only clears statistics.
 - `ProgramSession` is a host-policy layer above `ExecutionEngine`; do not move
   syscall behavior into instruction execution. Normal instructions and
   non-`ECALL` traps must preserve the existing engine semantics.
@@ -562,15 +581,18 @@ Completed:
 - Milestone 9b: validated split instruction/data cache configuration,
   deterministic set-associative LRU replacement, cold reset, per-stream raw
   hit/miss statistics, and direct execution-observer integration.
+- Milestone 9c: validated static and two-bit bimodal branch predictors,
+  deterministic PC-word indexing and saturating updates, reset behavior, raw
+  direction-accuracy statistics, jump exclusion, and execution-observer
+  integration.
 
 Next milestone:
 
-- Define and implement configurable conditional-branch predictors as pure
-  `ExecutionObservation` consumers. Begin with explicit static strategies and a
-  deterministic two-bit bimodal table, cold/reset state, and raw prediction
-  accuracy counters.
-- Converge cache and branch models through one owner only after their independent
-  contracts are stable. Do not define estimated-cycle formulas or publish
+- Converge the stable cache and branch models behind one `ExecutionObserver`
+  owner with a combined configuration, reset operation, and statistics snapshot.
+  Preserve the independent models and do not duplicate their state machines.
+- Define cycle-cost policy only after the combined ownership boundary is tested.
+  Keep every cost configurable and every formula explicit; do not publish
   performance figures before the benchmark harness measures them.
 - Remove ACT's spurious RVC flag and CSR-based failure diagnostics at generation
   time without weakening rvemu's loader or execution target. Then rerun the

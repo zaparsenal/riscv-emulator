@@ -51,6 +51,9 @@ milestones are complete:
 - read-only observations emitted after completed instructions, containing the
   PC transition, decoded instruction, optional successful data access, and
   optional resolved control-flow outcome
+- configurable split instruction/data caches with validated geometry,
+  deterministic set-associative LRU replacement, cold reset, and separate raw
+  instruction, load, and store hit/miss statistics
 - loading from either an in-memory byte span or an ELF file path
 - explicit parsing of fixed-address, 32-bit, little-endian RISC-V executables
 - complete prevalidation of ELF and program headers before architectural state
@@ -102,7 +105,8 @@ milestones are complete:
 RV32IM execution, static ELF32 loading, the shared program session, minimal
 output/termination syscalls, freestanding stack setup, and the command-line
 runner are complete. There is currently no full process-startup stack,
-performance model, or published benchmark result.
+branch-prediction or cycle model, benchmark harness, or published performance
+result.
 
 The ACT 4 smoke runner and reproducible generation/audit harness are also
 present, but no official ACT result is claimed. The pinned environment generated
@@ -179,6 +183,9 @@ command-line executable:
 - `InteractiveDebugger` drives the same `ProgramSession` used by batch runs.
   Breakpoints remain host-side addresses, stepping uses the normal session
   transition, and all commands share one strict guest-step budget.
+- `SplitCacheModel` consumes completed observations without accessing mutable
+  architectural state. It models independent instruction and data caches and
+  reports raw counters without assigning latency or estimated cycles.
 
 Execution computes pending effects before committing them. A misaligned taken
 jump or branch therefore traps at the control-transfer instruction without
@@ -279,6 +286,29 @@ but a host-resumed or terminating environment call remains a separately counted
 session transition rather than an architecturally retired instruction. The
 observer receives only the immutable event, not mutable CPU or memory access,
 and its lifetime must cover the engine or session using it.
+
+## Cache model
+
+`SplitCacheModel` is the first performance consumer of the observation
+contract. Its instruction and data caches are configured independently by
+capacity, line size, and associativity. Each cache starts cold, uses one
+deterministic least-recently-used order per set, and may be returned to that
+state with `reset()`.
+
+Configuration is rejected with a typed `CacheConfigurationError` unless:
+
+- capacity and associativity are positive
+- line size is a power of two and at least four bytes
+- line size multiplied by associativity fits in `std::size_t`
+- capacity is exactly divisible by line size multiplied by associativity
+
+The minimum four-byte line and RV32IM's natural data alignment ensure every
+observed instruction fetch or data operation touches one modeled line. Each
+completed instruction performs one instruction-cache lookup; its optional data
+access performs one data-cache lookup. Statistics expose integer accesses,
+hits, and misses for instruction traffic, all data traffic, loads, and stores.
+No floating-point rates, latency, write policy, memory hierarchy, or cycle
+formula is implied by these counters.
 
 ## ELF loading
 
@@ -513,9 +543,9 @@ does not reset registers or clear unrelated memory.
    by spurious RVC flags and CSR-based ACT failure diagnostics.
 8. **Complete:** add an initial interactive debugger with breakpoints,
    single-stepping, register display, and checked memory inspection.
-9. **In progress:** the shared completed-instruction observation contract is
-   complete; next add configurable cache and branch-prediction consumers
-   without changing architectural execution.
+9. **In progress:** the shared completed-instruction observation contract and
+   configurable split-cache consumer are complete; next add branch-prediction
+   consumers without changing architectural execution.
 10. Add reproducible workloads and report only measured benchmark results.
 11. Expand differential validation against Sail, QEMU, or Spike where each is
     practical.
@@ -557,6 +587,9 @@ does not reset registers or clear unrelated memory.
 - Execution observations cover successfully retired instructions only. Traps
   and host-handled environment calls retain their existing separate result and
   accounting paths.
+- The cache model represents separate first-level instruction and data caches
+  only. It does not yet model write policies, lower cache levels, coherence,
+  devices, prefetching, access latency, or estimated cycles.
 - ACT generated all 47 selected non-privileged RV32I/M ELFs, but the audit
   correctly blocks execution because every file is RVC-flagged and contains
   three CSR reads in its failure path. No architectural conformance result is

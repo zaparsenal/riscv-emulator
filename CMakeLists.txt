@@ -11,6 +11,7 @@ include(CTest)
 include(cmake/ProjectOptions.cmake)
 
 add_library(rvemu_core
+  src/cache_model.cpp
   src/cpu_state.cpp
   src/elf_loader.cpp
   src/execution_engine.cpp

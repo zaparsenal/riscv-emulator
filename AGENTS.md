@@ -34,6 +34,9 @@ complete. The repository has:
 - `ExecutionObservation` and an optional `ExecutionObserver` hook that report
   completed PC/instruction, successful data-access, and resolved control-flow
   facts after architectural commit
+- `SplitCacheModel` with validated independent instruction/data geometry,
+  deterministic set-associative LRU state, cold reset, and raw instruction,
+  load, and store hit/miss statistics
 - tested execution of `LUI`, `AUIPC`, `ADDI`, `SLTI`, `SLTIU`, `XORI`, `ORI`,
   `ANDI`, `SLLI`, `SRLI`, `SRAI`, `ADD`, `SUB`, `SLL`, `SLT`, `SLTU`, `XOR`,
   `SRL`, `SRA`, `OR`, `AND`, `JAL`, `JALR`, `BEQ`, `BNE`, `BLT`, `BGE`,
@@ -96,8 +99,8 @@ complete. The repository has:
 RV32IM, the static ELF loader, shared program-session contract, minimal
 output/termination syscalls, freestanding stack initializer, and command-line
 runner are complete. There is no full process-startup image, interactive
-debugger beyond the initial command set, performance model, or benchmark suite
-yet.
+debugger beyond the initial command set, branch-prediction or cycle model, or
+benchmark suite yet.
 
 The ACT 4 harness generated all 47 selected non-privileged RV32I/M ELFs from
 Sail results, but it is not a conformance result. The compatibility audit stops
@@ -108,6 +111,7 @@ three unsupported CSR reads in ACT's failure-diagnostic path.
 
 ```text
 include/rvemu/cpu_state.hpp  Public CPU-state API
+include/rvemu/cache_model.hpp Public cache configuration, state, and statistics
 include/rvemu/elf_loader.hpp Public ELF load results and file/span loader APIs
 include/rvemu/instruction.hpp Public decoded-instruction types and decoder
 include/rvemu/execution_engine.hpp Public trap, result, and execution-loop API
@@ -126,6 +130,7 @@ tools/act_smoke.cpp         ACT load, execution, and result classification
 tools/act_smoke_main.cpp    `rvemu-act-smoke` reporting executable
 conformance/act4/           Pinned ACT inputs, macros, linker, and manifest
 src/cpu_state.cpp            CPU-state implementation
+src/cache_model.cpp          Set-associative LRU and split-cache observation
 src/elf_loader.cpp           ELF32 parsing, validation, and transactional load
 src/instruction.cpp          Format decoding and immediate reconstruction
 src/execution_engine.cpp     Fetch, current ISA execution, step, and bounded run
@@ -260,6 +265,25 @@ frontend policy, and the `rvemu_cli` target produces the `rvemu` executable.
   `noexcept`, and must outlive the engine or session holding their non-owning
   pointer. They must not be given mutable architectural state. Traps, `ECALL`,
   and `EBREAK` emit no completed event.
+- `CacheConfiguration` uses byte capacity, byte line size, and associativity.
+  Reject zero capacity/associativity, line sizes below four or not powers of
+  two, multiplication overflow, and capacities not divisible by one complete
+  set. Surface failures as typed `CacheConfigurationError` values.
+- A minimum four-byte power-of-two line plus RV32IM natural data alignment
+  ensures each observed instruction or data operation maps to exactly one
+  modeled cache line. Revisit this contract before supporting wider or
+  misaligned emulated accesses.
+- `SetAssociativeCache` uses address-derived block, modulo set, and tag values.
+  Each set is ordered most-recently-used to least-recently-used. Prefer the
+  first invalid way on a cold miss and the final way on replacement; hits move
+  the matching line to the front. This avoids timestamp overflow.
+- `SplitCacheModel` performs one instruction lookup for every completed event
+  and one data lookup only when its optional data access is present. Instruction
+  and data state are independent. Track total data statistics plus load/store
+  subsets, maintaining `accesses == hits + misses`.
+- Cache `reset()` must invalidate every line and zero every counter. Raw integer
+  statistics carry no latency, hit-rate rounding, write policy, cycle estimate,
+  or performance claim.
 - `ProgramSession` is a host-policy layer above `ExecutionEngine`; do not move
   syscall behavior into instruction execution. Normal instructions and
   non-`ECALL` traps must preserve the existing engine semantics.
@@ -535,15 +559,19 @@ Completed:
   with post-commit timing, implicit instruction-fetch facts, optional successful
   data-access details, resolved control-flow outcomes, ProgramSession
   forwarding, and trap/syscall exclusion.
+- Milestone 9b: validated split instruction/data cache configuration,
+  deterministic set-associative LRU replacement, cold reset, per-stream raw
+  hit/miss statistics, and direct execution-observer integration.
 
 Next milestone:
 
-- Define configuration, reset, and statistics contracts for cache and
-  branch-prediction models as pure `ExecutionObservation` consumers.
-- Cache and branch-prediction implementations may proceed in parallel now that
-  event semantics are stable. Converge through one owner before defining
-  estimated-cycle formulas, and do not publish performance figures before the
-  benchmark harness measures them.
+- Define and implement configurable conditional-branch predictors as pure
+  `ExecutionObservation` consumers. Begin with explicit static strategies and a
+  deterministic two-bit bimodal table, cold/reset state, and raw prediction
+  accuracy counters.
+- Converge cache and branch models through one owner only after their independent
+  contracts are stable. Do not define estimated-cycle formulas or publish
+  performance figures before the benchmark harness measures them.
 - Remove ACT's spurious RVC flag and CSR-based failure diagnostics at generation
   time without weakening rvemu's loader or execution target. Then rerun the
   complete 47-file audit, execute the ten-file smoke subset, and add it to CI

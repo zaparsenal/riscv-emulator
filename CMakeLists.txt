@@ -14,6 +14,7 @@ add_library(rvemu_core
   src/branch_predictor.cpp
   src/cache_model.cpp
   src/cpu_state.cpp
+  src/cycle_estimator.cpp
   src/elf_loader.cpp
   src/execution_engine.cpp
   src/instruction.cpp

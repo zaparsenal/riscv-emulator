@@ -60,6 +60,8 @@ milestones are complete:
 - one `PerformanceAnalyzer` observer that owns both models, forwards every
   completed instruction once, resets them together, and returns one combined
   statistics snapshot
+- a configurable cycle-cost policy that derives separate base, instruction
+  miss, data miss, and branch-misprediction components with checked arithmetic
 - loading from either an in-memory byte span or an ELF file path
 - explicit parsing of fixed-address, 32-bit, little-endian RISC-V executables
 - complete prevalidation of ELF and program headers before architectural state
@@ -111,7 +113,7 @@ milestones are complete:
 RV32IM execution, static ELF32 loading, the shared program session, minimal
 output/termination syscalls, freestanding stack setup, and the command-line
 runner are complete. There is currently no full process-startup stack,
-cycle model, benchmark harness, or published performance result.
+benchmark harness, or published performance result.
 
 The ACT 4 smoke runner and reproducible generation/audit harness are also
 present, but no official ACT result is claimed. The pinned environment generated
@@ -196,7 +198,10 @@ command-line executable:
   ignoring direct and indirect jumps.
 - `PerformanceAnalyzer` is the single observer-facing owner of both models. It
   preserves their independent state machines and exposes combined
-  configuration, reset, and statistics operations.
+  configuration, reset, statistics, and checked cycle-estimate operations.
+- `CycleEstimator` applies an explicit configured cost policy to raw event
+  counts. It returns each cost component and their total, or a typed overflow
+  result; it does not measure host execution time.
 
 Execution computes pending effects before committing them. A misaligned taken
 jump or branch therefore traps at the control-transfer instruction without
@@ -347,9 +352,11 @@ These values do not assign misprediction penalties or estimated cycles.
 ## Combined performance analysis
 
 `PerformanceAnalyzer` owns one `SplitCacheModel` and one
-`BranchPredictorModel`. Its configuration embeds both existing configurations,
-so invalid cache geometry still raises `CacheConfigurationError` and invalid
-predictor settings still raise `BranchPredictorConfigurationError`.
+`BranchPredictorModel`. Its configuration embeds both existing model
+configurations plus the cycle-cost policy, so invalid cache geometry still
+raises `CacheConfigurationError`, invalid predictor settings still raise
+`BranchPredictorConfigurationError`, and a zero base cycle cost raises
+`CycleCostConfigurationError`.
 
 Each completed `ExecutionObservation` is forwarded exactly once to both owned
 models, then counted as one observed instruction. `statistics()` returns that
@@ -360,8 +367,34 @@ state and clears the combined instruction count.
 The analyzer can be passed directly to `ExecutionEngine` or `ProgramSession` as
 their optional observer. Because observations represent retired instructions,
 host-handled environment calls do not enter the analyzer even though they remain
-session guest steps. The combined owner still assigns no cycle costs and is not
-enabled by the CLI yet.
+session guest steps.
+
+## Cycle estimation
+
+`CycleEstimator` applies a deliberately small, configurable cost policy to the
+analyzer's raw integer counters:
+
+```text
+estimated cycles =
+    observed instructions × base instruction cycles
+  + instruction-cache misses × instruction-miss penalty
+  + data-cache misses × data-miss penalty
+  + branch mispredictions × misprediction penalty
+```
+
+The base instruction cost must be positive. Each penalty is an additional cost
+and may be zero. `PerformanceAnalyzer::estimate_cycles()` takes one current
+statistics snapshot and maps its instruction count, instruction-cache misses,
+total data-cache misses, and incorrect branch predictions into this formula.
+The result preserves all four components as well as their total.
+
+Every multiplication and addition is checked in `std::uint64_t`. A component
+overflow or final-sum overflow returns a typed `CycleEstimateFailure`; values
+are never silently wrapped or saturated.
+
+This is a model estimate under the caller's chosen assumptions, not elapsed
+time, hardware timing, or benchmark evidence. The CLI does not configure or
+report the analyzer yet, and no performance result is published.
 
 ## ELF loading
 
@@ -596,10 +629,12 @@ does not reset registers or clear unrelated memory.
    by spurious RVC flags and CSR-based ACT failure diagnostics.
 8. **Complete:** add an initial interactive debugger with breakpoints,
    single-stepping, register display, and checked memory inspection.
-9. **In progress:** the observation contract, configurable split-cache and
-   branch-prediction models, and their combined analysis owner are complete;
-   next define an explicit configurable cycle-cost policy.
-10. Add reproducible workloads and report only measured benchmark results.
+9. **Complete:** the observation contract, configurable split-cache and
+   branch-prediction models, combined analysis owner, and overflow-safe,
+   configurable cycle-cost policy.
+10. **Next:** add reproducible workloads and a benchmark harness that reports
+    measured host throughput alongside raw model counters and configured cycle
+    estimates.
 11. Expand differential validation against Sail, QEMU, or Spike where each is
     practical.
 
@@ -642,14 +677,18 @@ does not reset registers or clear unrelated memory.
   accounting paths.
 - The cache model represents separate first-level instruction and data caches
   only. It does not yet model write policies, lower cache levels, coherence,
-  devices, prefetching, access latency, or estimated cycles.
+  devices, prefetching, or access latency beyond the estimator's flat miss
+  penalty.
 - The branch predictor models conditional direction only. It has no target
   prediction, branch-target buffer, global/local history, tournament selection,
-  return-address stack, or misprediction-cycle penalty.
+  or return-address stack. The cycle estimator applies one flat configured
+  penalty to every incorrect direction prediction.
 - The combined analyzer is a library API only. The CLI does not configure or
-  report it yet, and no cycle estimate or measured performance result exists.
+  report it yet. Its cycle count is a configured estimate, not a measured
+  performance result.
 - ACT generated all 47 selected non-privileged RV32I/M ELFs, but the audit
   correctly blocks execution because every file is RVC-flagged and contains
   three CSR reads in its failure path. No architectural conformance result is
   published yet.
-- There are no performance claims or results yet.
+- There is no benchmark harness and there are no performance claims or measured
+  results yet.

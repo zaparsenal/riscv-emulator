@@ -75,8 +75,26 @@ TEST(PerformanceAnalyzerTest,
 }
 
 TEST(PerformanceAnalyzerTest,
+     PreservesTypedCycleCostConfigurationFailures) {
+  PerformanceAnalyzerConfiguration configuration = kConfiguration;
+  configuration.cycle_costs.base_instruction_cycles = 0U;
+
+  try {
+    (void)PerformanceAnalyzer(configuration);
+    FAIL() << "expected invalid cycle cost configuration";
+  } catch (const CycleCostConfigurationError& error) {
+    EXPECT_EQ(
+        error.code(),
+        CycleCostConfigurationErrorCode::ZeroBaseInstructionCycles);
+  }
+}
+
+TEST(PerformanceAnalyzerTest,
      ProducesOneConsistentSnapshotFromBothIndependentModels) {
-  PerformanceAnalyzer analyzer(kConfiguration);
+  PerformanceAnalyzerConfiguration configuration = kConfiguration;
+  configuration.cycle_costs =
+      CycleCostConfiguration{2U, 10U, 20U, 5U};
+  PerformanceAnalyzer analyzer(configuration);
 
   analyzer.observe(make_observation(
       0x1000U,
@@ -106,6 +124,17 @@ TEST(PerformanceAnalyzerTest,
   EXPECT_EQ(statistics.branch_predictor.predictions, 2U);
   EXPECT_EQ(statistics.branch_predictor.correct, 1U);
   EXPECT_EQ(statistics.branch_predictor.incorrect, 1U);
+
+  const CycleEstimateResult cycle_result = analyzer.estimate_cycles();
+  const auto* cycle_estimate = std::get_if<CycleEstimate>(&cycle_result);
+  ASSERT_NE(cycle_estimate, nullptr);
+  EXPECT_EQ(cycle_estimate->base_instruction_cycles, 6U);
+  EXPECT_EQ(cycle_estimate->instruction_cache_miss_cycles, 20U);
+  EXPECT_EQ(cycle_estimate->data_cache_miss_cycles, 20U);
+  EXPECT_EQ(cycle_estimate->branch_misprediction_cycles, 5U);
+  EXPECT_EQ(cycle_estimate->total_cycles, 51U);
+  EXPECT_EQ(analyzer.configuration().cycle_costs.base_instruction_cycles,
+            2U);
 }
 
 TEST(PerformanceAnalyzerTest, ResetClearsAndColdsEveryOwnedModel) {
@@ -126,6 +155,11 @@ TEST(PerformanceAnalyzerTest, ResetClearsAndColdsEveryOwnedModel) {
   EXPECT_EQ(reset_statistics.cache.instruction.accesses, 0U);
   EXPECT_EQ(reset_statistics.cache.data.total.accesses, 0U);
   EXPECT_EQ(reset_statistics.branch_predictor.predictions, 0U);
+  const CycleEstimateResult reset_cycle_result = analyzer.estimate_cycles();
+  const auto* reset_cycle_estimate =
+      std::get_if<CycleEstimate>(&reset_cycle_result);
+  ASSERT_NE(reset_cycle_estimate, nullptr);
+  EXPECT_EQ(reset_cycle_estimate->total_cycles, 0U);
 
   analyzer.observe(observation);
   const PerformanceAnalyzerStatistics cold_statistics =

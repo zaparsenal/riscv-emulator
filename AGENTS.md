@@ -42,7 +42,11 @@ complete. The repository has:
   conditional-direction accuracy statistics
 - `PerformanceAnalyzer`, the single observer owner that composes cache and
   predictor configuration, forwards each completed event once, resets both
-  models together, and returns a combined raw statistics snapshot
+  models together, returns a combined raw statistics snapshot, and derives a
+  checked configured cycle estimate
+- `CycleEstimator` with explicit base-instruction, instruction/data miss, and
+  branch-misprediction costs, separate result components, and typed overflow
+  failures
 - tested execution of `LUI`, `AUIPC`, `ADDI`, `SLTI`, `SLTIU`, `XORI`, `ORI`,
   `ANDI`, `SLLI`, `SRLI`, `SRAI`, `ADD`, `SUB`, `SLL`, `SLT`, `SLTU`, `XOR`,
   `SRL`, `SRA`, `OR`, `AND`, `JAL`, `JALR`, `BEQ`, `BNE`, `BLT`, `BGE`,
@@ -105,7 +109,8 @@ complete. The repository has:
 RV32IM, the static ELF loader, shared program-session contract, minimal
 output/termination syscalls, freestanding stack initializer, and command-line
 runner are complete. There is no full process-startup image, interactive
-debugger beyond the initial command set, cycle model, or benchmark suite yet.
+debugger beyond the initial command set, CLI performance report, or benchmark
+suite yet.
 
 The ACT 4 harness generated all 47 selected non-privileged RV32I/M ELFs from
 Sail results, but it is not a conformance result. The compatibility audit stops
@@ -118,6 +123,7 @@ three unsupported CSR reads in ACT's failure-diagnostic path.
 include/rvemu/cpu_state.hpp  Public CPU-state API
 include/rvemu/branch_predictor.hpp Public predictor configuration and statistics
 include/rvemu/cache_model.hpp Public cache configuration, state, and statistics
+include/rvemu/cycle_estimator.hpp Public cycle-cost configuration and estimates
 include/rvemu/elf_loader.hpp Public ELF load results and file/span loader APIs
 include/rvemu/instruction.hpp Public decoded-instruction types and decoder
 include/rvemu/execution_engine.hpp Public trap, result, and execution-loop API
@@ -139,6 +145,7 @@ conformance/act4/           Pinned ACT inputs, macros, linker, and manifest
 src/cpu_state.cpp            CPU-state implementation
 src/branch_predictor.cpp     Static and two-bit observation consumers
 src/cache_model.cpp          Set-associative LRU and split-cache observation
+src/cycle_estimator.cpp      Checked configurable cycle-cost calculation
 src/elf_loader.cpp           ELF32 parsing, validation, and transactional load
 src/instruction.cpp          Format decoding and immediate reconstruction
 src/execution_engine.cpp     Fetch, current ISA execution, step, and bounded run
@@ -318,8 +325,27 @@ frontend policy, and the `rvemu_cli` target produces the `rvemu` executable.
   complete value snapshots from both models. Its instruction count must match
   the instruction-cache access count under the completed-event contract.
 - Combined `reset()` delegates to both models and zeros the instruction count.
-  It assigns no cycle costs and must remain independent of session guest-step
-  accounting, which also includes host-handled environment calls.
+  It must remain independent of session guest-step accounting, which also
+  includes host-handled environment calls.
+- `CycleCostConfiguration` embeds one positive base cost per observed
+  instruction plus independent nonnegative instruction-cache miss, data-cache
+  miss, and branch-misprediction penalties. Zero penalties are valid; a zero
+  base cost raises `CycleCostConfigurationError`.
+- The cycle formula is
+  `instructions * base + instruction_misses * instruction_penalty +
+  data_misses * data_penalty + mispredictions * branch_penalty`. Penalties are
+  additional to the base instruction cost. Do not infer hit latency,
+  instruction-class latency, overlapping misses, or pipeline detail.
+- `CycleEstimator` checks every `std::uint64_t` multiplication and addition.
+  Return a typed `CycleEstimateFailure` identifying the overflowing component
+  or final total; never wrap, saturate, or use floating-point arithmetic.
+- Preserve each successful cost component in `CycleEstimate` as well as the
+  total. `PerformanceAnalyzer::estimate_cycles()` must use one statistics
+  snapshot and map instruction-cache misses, total data-cache misses, and
+  incorrect conditional predictions exactly once.
+- A cycle estimate is a deterministic result of configured assumptions, not a
+  measured performance result. Traps and hosted calls are excluded because
+  they emit no completed instruction observation.
 - `ProgramSession` is a host-policy layer above `ExecutionEngine`; do not move
   syscall behavior into instruction execution. Normal instructions and
   non-`ECALL` traps must preserve the existing engine semantics.
@@ -605,15 +631,20 @@ Completed:
 - Milestone 9d: a single combined performance-analyzer observer with nested
   configuration, exact fan-out to the independent cache/predictor models,
   unified reset, typed failure propagation, and consistent raw snapshots.
+- Milestone 9e: a validated cycle-cost policy with explicit base and penalty
+  inputs, separate estimate components, checked 64-bit multiplication and
+  summation, typed overflow results, and combined-analyzer integration.
 
 Next milestone:
 
-- Define a validated cycle-cost policy on top of combined raw statistics. Keep
-  base retired-instruction cost, instruction/data miss penalties, and branch
-  misprediction penalty explicit and configurable, with checked arithmetic and
-  a documented formula.
-- Do not present a configured estimate as a measured performance result. CLI
-  reporting and reproducible benchmarks remain separate later milestones.
+- Add a reproducible benchmark harness with fixed, documented RV32IM workloads
+  and explicit model configuration. Report framework-measured host throughput,
+  raw cache and branch statistics, and the configured cycle estimate without
+  conflating those categories.
+- Do not hand-enter or publish benchmark numbers. Record only values produced
+  by the harness in its observed environment, with enough workload, build, and
+  model configuration to reproduce them. CLI reporting remains a separate
+  later milestone.
 - Remove ACT's spurious RVC flag and CSR-based failure diagnostics at generation
   time without weakening rvemu's loader or execution target. Then rerun the
   complete 47-file audit, execute the ten-file smoke subset, and add it to CI
@@ -628,5 +659,5 @@ Next milestone:
   unsupported extensions out of the initial test selection.
 - Update both documentation files, validate, commit, and push.
 
-After the initial performance models and conformance pass: reproducible
-benchmarks and expanded differential testing against Sail, QEMU, or Spike.
+After the benchmark harness and initial conformance pass: CLI performance
+reporting and expanded differential testing against Sail, QEMU, or Spike.

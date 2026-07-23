@@ -59,3 +59,15 @@ target_link_libraries(
 
 include(GoogleTest)
 gtest_discover_tests(rvemu_tests)
+
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_test(
+  NAME Act4AuditParserTest
+  COMMAND
+    ${Python3_EXECUTABLE}
+    ${PROJECT_SOURCE_DIR}/conformance/act4/audit_generated_elfs_test.py
+)
+set_tests_properties(
+  Act4AuditParserTest
+  PROPERTIES ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1"
+)

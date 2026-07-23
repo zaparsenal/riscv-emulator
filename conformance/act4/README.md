@@ -51,32 +51,43 @@ RV32I/M tests. `smoke-tests.txt` names ten representative final ELFs that the
 runner will execute only after every selected ELF passes the compatibility
 audit.
 
-## Verified generation result and current blocker
+## Verified generation and smoke result
 
-On 2026-07-22, the pinned environment validated the configuration and built
-all 47 selected self-checking ELFs from Sail results. ACT reported 188 build
-tasks succeeded and no generation failure.
+On 2026-07-23, the pinned environment validated the configuration and built all
+47 selected self-checking ELFs from Sail results. ACT reported all 188 build
+tasks succeeded. The complete compatibility audit then reported:
 
-`audit_generated_elfs.py` then audited every generated ELF using the pinned
-RISC-V `readelf` and `objdump`. The audit intentionally stopped execution:
+- 47 ELFs audited
+- zero RVC-flagged or otherwise unexpectedly flagged ELFs
+- zero non-32-bit instructions
+- zero unsupported instructions
+- zero unexpected ECALL counts
 
-- all 47 ELFs have `e_flags == 0x1` (`EF_RISCV_RVC`)
-- no 16-bit instruction was present in any disassembly
-- each ELF contains three unsupported `CSRR[S]` reads, for 141 total:
-  `mcause`, `mtval`, and `mstatus`
-- those CSR reads are emitted in ACT's `failedtest_trap_x7_x9` diagnostic path
-- there was no `FENCE.I`, xRET, WFI, SFENCE/HFENCE, breakpoint, unexpected
-  system instruction, or unexpected ECALL count
+The ten-file smoke manifest then passed on rvemu. It covers representative
+integer arithmetic, shifts, branches, indirect jumps, loads, stores,
+multiplication, signed division, and unsigned remainder. This is a verified
+smoke result for that exact pinned selection, not certification or a claim that
+rvemu passes the complete architectural test suite.
 
-ACT's setup uses temporary `.option rvc` alignment regions even for these
-32-bit-only tests, which marks the final ELF as RVC. Clearing that flag alone
-would not be sufficient because the compiled diagnostic path still contains
-Zicsr instructions. The harness therefore does not rewrite the ELFs, relax
-rvemu's loader, run the ten-file subset, or claim a pass.
+`riscv_arch_test.h` is a generation-time model overlay copied into ACT's DUT
+include directory. It makes two narrowly scoped adaptations:
+
+- ACT's temporary `.option rvc` alignment requests become `.option norvc`, so
+  32-bit-only files no longer acquire `EF_RISCV_RVC`.
+- only the final `RVTEST_SELFCHECK` build replaces ACT's machine-CSR failure
+  diagnostics with a direct jump to rvemu's existing failure exit. Sail keeps
+  the original diagnostics, and every integer mismatch or unexpected trap
+  still terminates the DUT test as failure.
+
+The harness does not modify generated ELFs or relax rvemu's loader. The audit
+uses RISC-V mapping symbols to exclude explicitly marked inline data from
+instruction decoding while continuing to reject unknown encodings in every
+`$x` code region. Parser tests preserve that distinction.
 
 The generated `elf-audit.json` contains the SHA-256 digest, architecture
 attribute, decoded-instruction count, ELF flags, and rejected instructions for
-each of the 47 inputs.
+each input. `rvemu-results.log` contains the exact ten smoke outcomes and
+execution counts.
 
 ## Running the reproducible audit
 
@@ -102,14 +113,13 @@ conformance/act4/run_official_smoke.sh \
   build-act4-official
 ```
 
-The current pinned ACT output is expected to make the script exit nonzero at
-the audit stage. Inspect `build-act4-official/generation.log` and
-`build-act4-official/elf-audit.json` for the evidence. If ACT later emits an
-entirely RV32IM-compatible set, the same script will continue automatically to
-the ten-file rvemu smoke run and write `rvemu-results.log`.
+Success writes `generation.log`, `elf-audit.json`, and `rvemu-results.log` in
+the new output directory. Any generation failure, incompatible ELF, failing
+self-check, trap, unknown environment call, breakpoint, or step-limit
+exhaustion makes the script exit nonzero.
 
-No CI conformance job is enabled yet: a job known to stop before execution
-would not constitute a useful or honest conformance signal. The next ACT step
-is to remove the RVC flag and CSR diagnostic dependency at generation time,
-rerun this complete audit, and only then execute and consider checking in the
-verified smoke artifacts.
+The same pinned generate-audit-run sequence is available through the
+`ACT conformance smoke` GitHub Actions workflow. It runs weekly and may also be
+started manually. It is deliberately separate from per-push CI because the
+pinned container and full 47-file regeneration are substantially heavier than
+the unit-test suite.

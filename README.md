@@ -96,8 +96,9 @@ milestones are complete:
   breakpoints, single stepping, and checked register and memory inspection
 - a typed `rvemu-act-smoke` runner for already-generated, self-checking ACT 4
   RV32I/M ELF files
-- pinned ACT 4 inputs, a non-privileged halt ABI, linker script, and a ten-test
-  I/M smoke manifest without any unearned conformance claim
+- pinned ACT 4 inputs, a non-privileged halt ABI, linker script, generation-time
+  RV32IM model overlay, strict 47-file compatibility audit, and a verified
+  ten-test I/M smoke manifest
 - GoogleTest coverage for state, memory, instruction formats, fetch, execution,
   signed boundaries, shift limits, operand aliasing, PC-relative wraparound,
   taken and untaken branches, load extension, little-endian stores, effective
@@ -110,18 +111,20 @@ milestones are complete:
   stack placement and nonmutation, command-line parsing, hosted ELF execution,
   execution-observation timing and classification, ACT runner pass/fail and
   infrastructure classifications, and deterministic benchmark workloads
+- focused Python tests for strict ACT code/data mapping-symbol audit parsing
 - optional AddressSanitizer and UndefinedBehaviorSanitizer instrumentation
-- GitHub Actions validation with GCC and Clang plus a release benchmark dry run
+- GitHub Actions validation with GCC and Clang, a release benchmark dry run,
+  and a separately scheduled/manual pinned ACT smoke workflow
 
 RV32IM execution, static ELF32 loading, the shared program session, minimal
 output/termination syscalls, freestanding stack setup, and the command-line
 runner are complete. There is currently no full process-startup stack,
 CLI performance report, or published cross-machine performance claim.
 
-The ACT 4 smoke runner and reproducible generation/audit harness are also
-present, but no official ACT result is claimed. The pinned environment generated
-the selected ELFs successfully; a compatibility audit correctly blocked their
-execution because ACT emitted unsupported metadata and CSR diagnostics.
+The pinned ACT 4 environment now generates and strictly audits all 47 selected
+non-privileged RV32I/M ELFs, and the ten representative smoke files pass on
+rvemu. This is a reproducible result for the exact pinned subset, not
+certification or a claim of complete `riscv-arch-test` coverage.
 
 ## Supported instructions
 
@@ -566,20 +569,26 @@ ACT image by immutable digest. The observed image contains Sail 0.12, GCC
 memory map, derived Sail configuration, linker script, halt macros, exclusions,
 and ten representative I/M smoke paths.
 
-The pinned environment successfully generated all 47 selected non-privileged
-RV32I/M ELFs from Sail results (188 build tasks succeeded). The compatibility
-audit then stopped before emulator execution: all 47 files carry the RVC ELF
-flag despite containing no 16-bit instructions, and ACT's failure-diagnostic
-path places three unsupported CSR reads in every file—141 CSR instructions in
-total. The harness does not rewrite those files, relax the loader, or claim a
-pass. See `conformance/act4/README.md` for the reproduction command, immutable
-pins, audit evidence, and exact boundary.
+On 2026-07-23, the pinned environment generated all 47 selected
+non-privileged RV32I/M ELFs from Sail results (188 build tasks), and the strict
+compatibility audit accepted all 47 with zero unexpected flags, non-32-bit
+instructions, unsupported instructions, or ECALL-count mismatches. All ten
+representative smoke files then passed on rvemu.
+
+The tracked generation overlay removes ACT's temporary RVC alignment mode and
+uses an exit-only failure path for the final self-checking build. Sail retains
+its original diagnostic path, mismatch and trap paths remain failures, the
+generated ELFs are never rewritten, and rvemu's loader remains strict. The
+auditor follows RISC-V `$x`/`$d` mapping symbols so inline failure metadata is
+not mistaken for executable code while unknown encodings in code still fail
+the run. See `conformance/act4/README.md` for reproduction commands, immutable
+pins, audit evidence, and the exact test boundary.
 
 ## Repository layout
 
 ```text
 .
-├── .github/workflows/ci.yml  # GCC/Clang sanitizer CI
+├── .github/workflows/        # Sanitizer, benchmark-smoke, and ACT workflows
 ├── app/                      # CLI, interactive debugger, and process entry
 ├── benchmarks/               # Fixed workloads and optional benchmark harness
 ├── cmake/                    # Shared compiler and sanitizer options
@@ -699,10 +708,9 @@ does not reset registers or clear unrelated memory.
 6. **Complete:** the shared program-session contract, host breakpoints,
    accounting, Linux-style output/termination syscalls, freestanding stack
    setup, and command-line executable are complete.
-7. **In progress:** the ACT 4 runner, immutable tool pins, I/M-oriented UDB and
-   Sail configuration, generation harness, and compatibility audit are
-   complete. All 47 selected ELFs generate, but execution is correctly blocked
-   by spurious RVC flags and CSR-based ACT failure diagnostics.
+7. **Complete:** the ACT 4 runner, immutable tool pins, I/M-oriented UDB and
+   Sail configuration, generation overlay, strict 47-file audit, and verified
+   ten-test RV32I/M smoke run.
 8. **Complete:** add an initial interactive debugger with breakpoints,
    single-stepping, register display, and checked memory inspection.
 9. **Complete:** the observation contract, configurable split-cache and
@@ -711,8 +719,8 @@ does not reset registers or clear unrelated memory.
 10. **Complete:** three deterministic RV32IM workloads and a pinned Google
     Benchmark harness reporting measured host throughput, raw cache/predictor
     statistics, hit/accuracy rates, and configured cycle estimates.
-11. **Next:** complete the initial ACT smoke pass, then expand differential
-    validation against Sail, QEMU, or Spike where practical.
+11. **Next:** expand differential validation against Sail, QEMU, or Spike and
+    expose optional performance-model reporting through the CLI.
 
 ## Current limitations
 
@@ -766,9 +774,9 @@ does not reset registers or clear unrelated memory.
   suites. Host throughput varies with hardware, operating-system load, compiler,
   build flags, and benchmark settings; no portable performance guarantee is
   claimed.
-- ACT generated all 47 selected non-privileged RV32I/M ELFs, but the audit
-  correctly blocks execution because every file is RVC-flagged and contains
-  three CSR reads in its failure path. No architectural conformance result is
-  published yet.
+- The ACT result is limited to ten executed smoke files from 47 generated and
+  compatibility-audited non-privileged RV32I/M files. Privileged tests, CSRs,
+  traps, RVC, floating point, atomics, and the rest of the architectural suite
+  remain outside this result; it is not certification.
 - No benchmark baseline is checked in and no cross-machine performance claim is
   made. Measurements are produced by the harness in their observed environment.

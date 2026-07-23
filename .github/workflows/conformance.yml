@@ -1,0 +1,45 @@
+name: ACT conformance smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  act4-smoke:
+    name: Pinned RV32IM ACT smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Build ACT smoke runner
+        run: |
+          cmake -S . -B build-act \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=OFF \
+            -DRVEMU_BUILD_ACT_SMOKE_RUNNER=ON
+          cmake --build build-act --target rvemu_act_smoke --parallel 2
+
+      - name: Check out pinned riscv-arch-test source
+        run: |
+          git init "${RUNNER_TEMP}/riscv-arch-test"
+          git -C "${RUNNER_TEMP}/riscv-arch-test" remote add origin \
+            https://github.com/riscv-non-isa/riscv-arch-test.git
+          git -C "${RUNNER_TEMP}/riscv-arch-test" fetch --depth=1 origin \
+            585fbaf97a7df6e2f0fe8808edd3ad839eb1afe3
+          git -C "${RUNNER_TEMP}/riscv-arch-test" checkout --detach FETCH_HEAD
+
+      - name: Generate, audit, and execute pinned smoke set
+        env:
+          RVEMU_ACT_JOBS: "2"
+        run: >-
+          conformance/act4/run_official_smoke.sh
+          "${RUNNER_TEMP}/riscv-arch-test"
+          build-act/rvemu-act-smoke
+          "${RUNNER_TEMP}/rvemu-act4"

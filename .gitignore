@@ -14,3 +14,7 @@ compile_commands.json
 *.gcno
 *.profraw
 *.profdata
+
+# Python helper caches
+__pycache__/
+*.py[cod]

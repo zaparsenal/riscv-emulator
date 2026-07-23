@@ -62,6 +62,7 @@ cp "${script_dir}/config/test_config.yaml" "${config_root}/config/test_config.ya
 cp "${script_dir}/config/rvemu-rv32im.yaml" "${config_root}/config/rvemu-rv32im.yaml"
 cp "${script_dir}/link.ld" "${config_root}/link.ld"
 cp "${script_dir}/rvmodel_macros.h" "${config_root}/rvmodel_macros.h"
+cp "${script_dir}/riscv_arch_test.h" "${config_root}/riscv_arch_test.h"
 python3 "${script_dir}/prepare_sail_config.py" \
   "${act_checkout}/config/sail/sail-RVI20U32/sail.json" \
   "${config_root}/sail.json"

@@ -30,6 +30,7 @@ RV32IM_OPCODES = {
     0x73,  # SYSTEM (ECALL only)
 }
 INSTRUCTION_RE = re.compile(r"^\s*[0-9a-f]+:\s+([0-9a-f]+)\s+(\S+)")
+MAPPING_SYMBOL_RE = re.compile(r"^\s*[0-9a-f]+\s+<(\$[dx][^>]*)>:$")
 ARCH_RE = re.compile(r'Tag_RISCV_arch:\s+"([^"]+)"')
 
 
@@ -37,28 +38,21 @@ def run_tool(arguments: list[str]) -> str:
     return subprocess.run(arguments, check=True, capture_output=True, text=True).stdout
 
 
-def audit_elf(path: Path, objdump: str, readelf: str) -> dict[str, object]:
-    data = path.read_bytes()
-    if len(data) < 52 or data[:7] != b"\x7fELF\x01\x01\x01":
-        raise ValueError(f"{path}: not a 32-bit little-endian ELF")
-    if int.from_bytes(data[18:20], "little") != 243:
-        raise ValueError(f"{path}: not a RISC-V ELF")
-
-    flags = int.from_bytes(data[36:40], "little")
-    attributes = run_tool([readelf, "-A", str(path)])
-    arch_match = ARCH_RE.search(attributes)
-    arch = arch_match.group(1) if arch_match else "missing"
-    if arch not in EXPECTED_ARCH_ATTRIBUTES:
-        raise ValueError(f"{path}: unexpected Tag_RISCV_arch {arch!r}")
-
+def audit_disassembly(disassembly: str) -> tuple[int, int, list[str], list[str]]:
     decoded_count = 0
     ecall_count = 0
     non_32_bit: list[str] = []
     unsupported: list[str] = []
-    disassembly = run_tool([objdump, "-d", "-M", "no-aliases", str(path)])
+    in_code = True
+
     for line in disassembly.splitlines():
+        mapping_match = MAPPING_SYMBOL_RE.match(line)
+        if mapping_match is not None:
+            in_code = mapping_match.group(1).startswith("$x")
+            continue
+
         match = INSTRUCTION_RE.match(line)
-        if match is None:
+        if match is None or not in_code:
             continue
         encoding, mnemonic = match.groups()
         if len(encoding) != 8:
@@ -80,6 +74,28 @@ def audit_elf(path: Path, objdump: str, readelf: str) -> dict[str, object]:
                 ecall_count += 1
             else:
                 unsupported.append(line.strip())
+
+    return decoded_count, ecall_count, non_32_bit, unsupported
+
+
+def audit_elf(path: Path, objdump: str, readelf: str) -> dict[str, object]:
+    data = path.read_bytes()
+    if len(data) < 52 or data[:7] != b"\x7fELF\x01\x01\x01":
+        raise ValueError(f"{path}: not a 32-bit little-endian ELF")
+    if int.from_bytes(data[18:20], "little") != 243:
+        raise ValueError(f"{path}: not a RISC-V ELF")
+
+    flags = int.from_bytes(data[36:40], "little")
+    attributes = run_tool([readelf, "-A", str(path)])
+    arch_match = ARCH_RE.search(attributes)
+    arch = arch_match.group(1) if arch_match else "missing"
+    if arch not in EXPECTED_ARCH_ATTRIBUTES:
+        raise ValueError(f"{path}: unexpected Tag_RISCV_arch {arch!r}")
+
+    disassembly = run_tool(
+        [objdump, "-d", "--show-all-symbols", "-M", "no-aliases", str(path)]
+    )
+    decoded_count, ecall_count, non_32_bit, unsupported = audit_disassembly(disassembly)
 
     if decoded_count == 0:
         raise ValueError(f"{path}: objdump found no instructions")

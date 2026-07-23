@@ -103,11 +103,18 @@ complete. The repository has:
   separately from loader, trap, unknown-call, breakpoint, and limit failures
 - an immutable official ACT image pin, observed tool versions, I/M-oriented UDB
   and derived Sail configuration, clean generation harness, compatibility
-  auditor, non-privileged halt macros, linker script, and ten-test smoke manifest
+  auditor, non-privileged halt macros, linker script, generation-time RV32IM
+  overlay, and ten-test smoke manifest
+- a verified pinned ACT result: 188 successful build tasks, 47 compatible
+  audited ELFs, and ten passing representative RV32I/M smoke programs
+- a mapping-symbol-aware audit parser that skips explicit `$d` inline metadata
+  but continues to reject unsupported encodings in every `$x` code region
 - GoogleTest unit tests
+- focused Python tests for the ACT disassembly audit boundary
 - optional AddressSanitizer and UndefinedBehaviorSanitizer support
 - GCC and Clang GitHub Actions CI
 - a release benchmark build and deterministic one-iteration CI smoke run
+- a scheduled/manual pinned ACT generation, audit, and smoke workflow
 - a pinned GoogleTest source dependency by default, avoiding host-package ABI
   mismatches; `RVEMU_USE_SYSTEM_GTEST=ON` is an explicit opt-in
 - a pinned Google Benchmark source dependency when benchmarks are enabled;
@@ -119,10 +126,10 @@ runner are complete. There is no full process-startup image, interactive
 debugger beyond the initial command set, CLI performance report, or published
 cross-machine benchmark baseline.
 
-The ACT 4 harness generated all 47 selected non-privileged RV32I/M ELFs from
-Sail results, but it is not a conformance result. The compatibility audit stops
-before execution because all files are spuriously RVC-flagged and each contains
-three unsupported CSR reads in ACT's failure-diagnostic path.
+The ACT 4 harness generated and compatibility-audited all 47 selected
+non-privileged RV32I/M ELFs from Sail results. On 2026-07-23 the ten-file
+representative smoke manifest passed on rvemu. This is a pinned subset result,
+not certification or complete `riscv-arch-test` coverage.
 
 ## Architecture and directory structure
 
@@ -151,7 +158,7 @@ benchmarks/rvemu_benchmarks.cpp Google Benchmark timing and metric reporting
 tools/act_smoke.hpp         Typed self-checking ELF smoke-runner API
 tools/act_smoke.cpp         ACT load, execution, and result classification
 tools/act_smoke_main.cpp    `rvemu-act-smoke` reporting executable
-conformance/act4/           Pinned ACT inputs, macros, linker, and manifest
+conformance/act4/           Pinned ACT inputs, overlay, audit, and manifest
 src/cpu_state.cpp            CPU-state implementation
 src/branch_predictor.cpp     Static and two-bit observation consumers
 src/cache_model.cpp          Set-associative LRU and split-cache observation
@@ -166,7 +173,8 @@ src/program_session.cpp      Hosted execution, call dispatch, and breakpoints
 src/stack.cpp                Checked 16-byte-aligned stack placement
 tests/                       Focused GoogleTest unit tests
 cmake/ProjectOptions.cmake   Warnings, C++20, and sanitizer settings
-.github/workflows/ci.yml     GCC/Clang sanitizer CI
+.github/workflows/ci.yml     GCC/Clang sanitizer and benchmark-smoke CI
+.github/workflows/conformance.yml Scheduled/manual pinned ACT smoke
 README.md                    Human-facing project documentation
 ```
 
@@ -444,9 +452,10 @@ only when `RVEMU_BUILD_BENCHMARKS=ON`.
   default enabled, `BUILD_TESTING=OFF` builds `rvemu_core` and `rvemu`; add
   `RVEMU_BUILD_CLI=OFF` for a core-only build.
 - Treat `conformance/act4/pins.json` and its adjacent macro, linker, manifest,
-  configuration, audit, generation script, and README as the current runner
-  contract. The official image is pinned by immutable multi-arch digest with
-  Sail 0.12, GCC 16.1.0, binutils 2.46, and UDB 0.1.13 as observed versions.
+  model overlay, configuration, audit, parser tests, generation script, and
+  README as the current runner contract. The official image is pinned by
+  immutable multi-arch digest with Sail 0.12, GCC 16.1.0, binutils 2.46, and
+  UDB 0.1.13 as observed versions.
 - UDB 0.1.13 requires an `Sm` scaffold to define `MXLEN` and `MUTABLE_MISA_M`,
   even for an I/M-only non-privileged selection. Keep privileged tests disabled,
   do not define `STANDARD_SM_SUPPORTED`, and do not mistake the scaffold for
@@ -456,10 +465,22 @@ only when `RVEMU_BUILD_BENCHMARKS=ON`.
   subset. Unknown objdump directives, non-32-bit encodings, unsupported
   opcodes, unexpected system instructions, flags, attributes, or ECALL counts
   must block execution.
-- Current pinned output is intentionally blocked: 47 RVC flags, zero 16-bit
-  instructions, and 141 unsupported CSR reads (mcause, mtval, and mstatus once
-  per ELF) in `failedtest_trap_x7_x9`. Do not clear flags, relax the loader, or
-  claim a conformance pass while that diagnostic dependency remains.
+- `conformance/act4/riscv_arch_test.h` is a DUT include overlay for the pinned
+  environment. Its `rvc` preprocessor mapping keeps ACT's alignment regions in
+  `.option norvc`, preventing a false `EF_RISCV_RVC` promise without modifying
+  the final ELF.
+- Only the final `RVTEST_SELFCHECK` build replaces ACT's machine-CSR failure
+  diagnostics. Its four relevant integer failure labels jump to the existing
+  `rvmodel_halt_fail`; Sail retains the original diagnostic implementation, and
+  every mismatch or unexpected trap remains a test failure.
+- Audit disassembly with `--show-all-symbols`. RISC-V `$d` mapping regions are
+  explicit inline metadata and are not instructions; `$x` regions and files
+  without mapping symbols remain fully audited. Never blanket-ignore `.word`,
+  unknown mnemonics, or other undecodable content in code.
+- The verified 2026-07-23 result is 188 successful build tasks, 47 audited ELFs
+  with zero flag, width, opcode, or ECALL-count failures, and ten passing smoke
+  executions. Do not generalize it to the other 37 compatible files or to
+  privileged, CSR, trap-handler, RVC, floating-point, or atomic coverage.
 - The ELF loader supports fixed-address, 32-bit, little-endian RISC-V `ET_EXEC`
   files. It intentionally rejects `ET_DYN`; load bias, dynamic relocations, and
   an interpreter are not modeled.
@@ -662,8 +683,14 @@ Completed:
   runner tests. This is plumbing only; no official ACT result is claimed.
 - Milestone 7b: immutable official tool-image pins, validated I/M-oriented UDB
   and derived Sail inputs, reproducible 47-ELF generation, and a strict
-  compatibility audit that records the current RVC-flag and CSR blockers before
-  emulator execution. No conformance pass is claimed.
+  compatibility audit that recorded the then-current RVC-flag and CSR blockers
+  before emulator execution. Milestone 7c supersedes those blockers.
+- Milestone 7c: a tracked generation-time model overlay that removes spurious
+  RVC flags and replaces only final-DUT machine-CSR diagnostics; a
+  mapping-symbol-aware strict audit with parser tests; 47 clean audited ELFs;
+  ten passing representative RV32I/M smoke executions; and a scheduled/manual
+  pinned GitHub Actions workflow. This remains a scoped smoke result, not full
+  certification.
 - Milestone 8a: an interactive debugger above `ProgramSession` with mapped
   host breakpoints, step-over-on-continue behavior, single stepping, cumulative
   limits/accounting, full integer-register display, checked byte-memory display,
@@ -692,19 +719,15 @@ Completed:
 
 Next milestone:
 
-- Remove ACT's spurious RVC flag and CSR-based failure diagnostics at generation
-  time without weakening rvemu's loader or execution target. Then rerun the
-  complete 47-file audit, execute the ten-file smoke subset, and add it to CI
-  only after a verified pass. Broader generated coverage belongs in scheduled
-  or manual CI.
-- The ACT baseline is `riscv-arch-test` commit
-  `585fbaf97a7df6e2f0fe8808edd3ad839eb1afe3` and official image digest
+- Add optional CLI configuration and reporting for the completed performance
+  models without changing default guest execution or confusing configured cycle
+  estimates with measured host time.
+- Expand differential testing against Sail, QEMU, or Spike with small,
+  reproducible RV32IM programs and precise state/signature comparisons.
+- Consider executing all 47 currently compatible ACT files in the
+  scheduled/manual workflow after confirming the additional runtime and signal
+  are worthwhile. Do not turn the scoped ten-test result into an unsupported
+  full-suite claim.
+- Keep the ACT baseline pinned to `riscv-arch-test` commit
+  `585fbaf97a7df6e2f0fe8808edd3ad839eb1afe3` and image digest
   `sha256:e2a3982d778cfa5b85502b71dc7cb90891c4119d0b9335f4aa74e71a2206e0e4`.
-  Record every pinned input rather than relying on moving tags.
-- Do not claim full `riscv-arch-test` coverage while CSR, privilege, and trap
-  handler state are absent. Keep RVC, floating point, atomics, and other
-  unsupported extensions out of the initial test selection.
-- Update both documentation files, validate, commit, and push.
-
-After the initial conformance pass: CLI performance reporting and expanded
-differential testing against Sail, QEMU, or Spike.

@@ -20,11 +20,12 @@ constexpr std::uint32_t kInstructionSize = 4U;
 }  // namespace
 
 ProgramSession::ProgramSession(CpuState& state, Memory& memory,
-                               EnvironmentCallHandler& environment) noexcept
+                               EnvironmentCallHandler& environment,
+                               ExecutionObserver* observer) noexcept
     : state_(state),
       memory_(memory),
       environment_(environment),
-      engine_(state, memory) {}
+      engine_(state, memory, observer) {}
 
 SessionStepResult ProgramSession::step() {
   const StepResult execution_result = engine_.step();

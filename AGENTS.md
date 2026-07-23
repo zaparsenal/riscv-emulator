@@ -31,6 +31,9 @@ complete. The repository has:
 - architectural instruction trap causes and variant-based step/run result types
 - `ExecutionEngine` with aligned fetch, decode, a strict instruction limit, and
   first-trap termination
+- `ExecutionObservation` and an optional `ExecutionObserver` hook that report
+  completed PC/instruction, successful data-access, and resolved control-flow
+  facts after architectural commit
 - tested execution of `LUI`, `AUIPC`, `ADDI`, `SLTI`, `SLTIU`, `XORI`, `ORI`,
   `ANDI`, `SLLI`, `SRLI`, `SRAI`, `ADD`, `SUB`, `SLL`, `SLT`, `SLTU`, `XOR`,
   `SRL`, `SRA`, `OR`, `AND`, `JAL`, `JALR`, `BEQ`, `BNE`, `BLT`, `BGE`,
@@ -108,6 +111,7 @@ include/rvemu/cpu_state.hpp  Public CPU-state API
 include/rvemu/elf_loader.hpp Public ELF load results and file/span loader APIs
 include/rvemu/instruction.hpp Public decoded-instruction types and decoder
 include/rvemu/execution_engine.hpp Public trap, result, and execution-loop API
+include/rvemu/execution_observation.hpp Public completed-instruction event API
 include/rvemu/linux_syscalls.hpp Public output sink and hosted Linux-call API
 include/rvemu/memory.hpp     Public checked-memory API and error types
 include/rvemu/program_session.hpp Public hosted-run and environment-call API
@@ -238,6 +242,24 @@ frontend policy, and the `rvemu_cli` target produces the `rvemu` executable.
   `IllegalInstruction` until implemented.
 - `run()` always takes a strict instruction limit. This makes tests deterministic
   and prevents an accidental unbounded host loop.
+- `ExecutionObservation` is the one read-only performance boundary.
+  `StepCompleted` aliases the same type so returned step results and injected
+  observers cannot disagree about event contents.
+- Emit exactly one observation after every successfully retired instruction and
+  only after its register, memory, and PC effects have committed. A completed
+  event's PC and raw instruction imply one successful aligned four-byte
+  instruction fetch.
+- Data observations describe only successful RV32IM loads and stores using the
+  effective 32-bit address, direction, and width of 1, 2, or 4 bytes. Faulting
+  accesses emit no completed observation. The optional shape relies on RV32IM's
+  maximum of one data access per instruction.
+- Control-flow observations classify conditional branches, direct `JAL`, and
+  indirect `JALR`. `taken` is the evaluated outcome and the event's next PC is
+  the actual resolved successor, including fallthrough for an untaken branch.
+- Observer callbacks receive only a `const ExecutionObservation&`, are
+  `noexcept`, and must outlive the engine or session holding their non-owning
+  pointer. They must not be given mutable architectural state. Traps, `ECALL`,
+  and `EBREAK` emit no completed event.
 - `ProgramSession` is a host-policy layer above `ExecutionEngine`; do not move
   syscall behavior into instruction execution. Normal instructions and
   non-`ECALL` traps must preserve the existing engine semantics.
@@ -258,6 +280,9 @@ frontend policy, and the `rvemu_cli` target produces the `rvemu` executable.
 - Session breakpoints are host-side PC addresses checked before execution. They
   must not patch guest memory. `step()` bypasses breakpoints so a debugger can
   deliberately advance after stopping.
+- `ProgramSession` forwards an optional observer to its execution engine.
+  Resumed and terminating environment calls remain separately accounted guest
+  steps and do not become completed instruction observations.
 - The supported generated-code target is little-endian RV32IM, `IALIGN=32`, and
   the ILP32 soft-float ABI. Compile fixtures explicitly with
   `-march=rv32im -mabi=ilp32`; do not let default RVC or floating-point targets
@@ -506,17 +531,19 @@ Completed:
   host breakpoints, step-over-on-continue behavior, single stepping, cumulative
   limits/accounting, full integer-register display, checked byte-memory display,
   recoverable command errors, and end-to-end CLI tests.
+- Milestone 9a: a shared read-only completed-instruction observation contract
+  with post-commit timing, implicit instruction-fetch facts, optional successful
+  data-access details, resolved control-flow outcomes, ProgramSession
+  forwarding, and trap/syscall exclusion.
 
 Next milestone:
 
-- Define one read-only execution-observation event contract before implementing
-  performance models. It must capture only facts already established by a
-  completed architectural transition (PC/instruction, memory access, and
-  control-flow outcome) without changing execution results.
-- Once that contract is stable, cache and branch-prediction models may proceed
-  in parallel and converge through one owner for event semantics and cycle
-  formulas. Do not publish performance figures before the benchmark harness
-  measures them.
+- Define configuration, reset, and statistics contracts for cache and
+  branch-prediction models as pure `ExecutionObservation` consumers.
+- Cache and branch-prediction implementations may proceed in parallel now that
+  event semantics are stable. Converge through one owner before defining
+  estimated-cycle formulas, and do not publish performance figures before the
+  benchmark harness measures them.
 - Remove ACT's spurious RVC flag and CSR-based failure diagnostics at generation
   time without weakening rvemu's loader or execution target. Then rerun the
   complete 47-file audit, execute the ten-file smoke subset, and add it to CI
@@ -531,6 +558,5 @@ Next milestone:
   unsupported extensions out of the initial test selection.
 - Update both documentation files, validate, commit, and push.
 
-After the observation contract and initial conformance pass: cache/branch
-models, reproducible benchmarks, and expanded differential testing against
-Sail, QEMU, or Spike.
+After the initial performance models and conformance pass: reproducible
+benchmarks and expanded differential testing against Sail, QEMU, or Spike.

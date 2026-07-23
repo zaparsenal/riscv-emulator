@@ -241,6 +241,22 @@ struct SignedDivisionResult {
   return (address & 0x3U) == 0U;
 }
 
+[[nodiscard]] constexpr std::uint8_t data_access_width(
+    const DecodedInstruction& instruction) noexcept {
+  switch (instruction.function3) {
+    case 0x0U:
+    case 0x4U:
+      return 1U;
+    case 0x1U:
+    case 0x5U:
+      return 2U;
+    case 0x2U:
+      return 4U;
+    default:
+      return 0U;
+  }
+}
+
 [[nodiscard]] constexpr std::uint32_t sign_extend_byte(
     const std::uint8_t value) noexcept {
   const std::uint32_t extended = value;
@@ -315,8 +331,9 @@ using LoadResult = std::variant<std::uint32_t, ExecutionFailure>;
 
 }  // namespace
 
-ExecutionEngine::ExecutionEngine(CpuState& state, Memory& memory) noexcept
-    : state_(state), memory_(memory) {}
+ExecutionEngine::ExecutionEngine(CpuState& state, Memory& memory,
+                                 ExecutionObserver* observer) noexcept
+    : state_(state), memory_(memory), observer_(observer) {}
 
 StepResult ExecutionEngine::step() {
   const std::uint32_t program_counter = state_.program_counter();
@@ -341,6 +358,8 @@ StepResult ExecutionEngine::step() {
   const std::uint32_t sequential_program_counter = program_counter + 4U;
   std::uint32_t next_program_counter = sequential_program_counter;
   std::optional<std::uint32_t> destination_value;
+  std::optional<DataMemoryAccessObservation> data_memory_access;
+  std::optional<ControlFlowObservation> control_flow;
   bool instruction_supported = false;
 
   switch (instruction->opcode) {
@@ -370,6 +389,8 @@ StepResult ExecutionEngine::step() {
                                 next_program_counter);
       }
       destination_value = sequential_program_counter;
+      control_flow =
+          ControlFlowObservation{ControlFlowKind::DirectJump, true};
       instruction_supported = true;
       break;
     case Opcode::Jalr:
@@ -385,6 +406,8 @@ StepResult ExecutionEngine::step() {
                                 next_program_counter);
       }
       destination_value = sequential_program_counter;
+      control_flow =
+          ControlFlowObservation{ControlFlowKind::IndirectJump, true};
       instruction_supported = true;
       break;
     case Opcode::Branch: {
@@ -401,6 +424,8 @@ StepResult ExecutionEngine::step() {
                                   next_program_counter);
         }
       }
+      control_flow = ControlFlowObservation{
+          ControlFlowKind::ConditionalBranch, *branch_taken};
       instruction_supported = true;
       break;
     }
@@ -413,6 +438,9 @@ StepResult ExecutionEngine::step() {
         return instruction_trap(failure->cause, failure->value);
       }
       destination_value = std::get<std::uint32_t>(load_result);
+      data_memory_access = DataMemoryAccessObservation{
+          DataMemoryAccessKind::Load, address,
+          data_access_width(*instruction)};
       instruction_supported = true;
       break;
     }
@@ -425,6 +453,9 @@ StepResult ExecutionEngine::step() {
       if (failure.has_value()) {
         return instruction_trap(failure->cause, failure->value);
       }
+      data_memory_access = DataMemoryAccessObservation{
+          DataMemoryAccessKind::Store, address,
+          data_access_width(*instruction)};
       instruction_supported = true;
       break;
     }
@@ -453,8 +484,14 @@ StepResult ExecutionEngine::step() {
     state_.write_register(instruction->destination, *destination_value);
   }
 
+  const ExecutionObservation observation{
+      *instruction, program_counter, next_program_counter, data_memory_access,
+      control_flow};
   state_.set_program_counter(next_program_counter);
-  return StepCompleted{*instruction, program_counter, next_program_counter};
+  if (observer_ != nullptr) {
+    observer_->observe(observation);
+  }
+  return observation;
 }
 
 RunResult ExecutionEngine::run(const std::uint64_t instruction_limit) {

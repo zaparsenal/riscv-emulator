@@ -4,7 +4,7 @@
 #include <variant>
 
 #include "rvemu/cpu_state.hpp"
-#include "rvemu/instruction.hpp"
+#include "rvemu/execution_observation.hpp"
 #include "rvemu/memory.hpp"
 
 namespace rvemu {
@@ -27,11 +27,7 @@ struct Trap {
   std::uint32_t value;
 };
 
-struct StepCompleted {
-  DecodedInstruction instruction;
-  std::uint32_t program_counter;
-  std::uint32_t next_program_counter;
-};
+using StepCompleted = ExecutionObservation;
 
 using StepResult = std::variant<StepCompleted, Trap>;
 
@@ -48,7 +44,8 @@ using RunResult = std::variant<InstructionLimitReached, RunTrapped>;
 
 class ExecutionEngine final {
  public:
-  ExecutionEngine(CpuState& state, Memory& memory) noexcept;
+  ExecutionEngine(CpuState& state, Memory& memory,
+                  ExecutionObserver* observer = nullptr) noexcept;
 
   [[nodiscard]] StepResult step();
   [[nodiscard]] RunResult run(std::uint64_t instruction_limit);
@@ -59,6 +56,7 @@ class ExecutionEngine final {
 
   CpuState& state_;
   Memory& memory_;
+  ExecutionObserver* observer_;
 };
 
 }  // namespace rvemu

@@ -104,7 +104,8 @@ using SessionRunResult =
 class ProgramSession final {
  public:
   ProgramSession(CpuState& state, Memory& memory,
-                 EnvironmentCallHandler& environment) noexcept;
+                 EnvironmentCallHandler& environment,
+                 ExecutionObserver* observer = nullptr) noexcept;
 
   [[nodiscard]] SessionStepResult step();
   [[nodiscard]] SessionRunResult run(

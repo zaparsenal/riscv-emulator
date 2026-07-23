@@ -48,6 +48,9 @@ milestones are complete:
   model, including forward-compatible handling of reserved fence fields
 - precise, non-retiring `ECALL` and `EBREAK` traps
 - bounded execution of loops through the existing instruction-limit API
+- read-only observations emitted after completed instructions, containing the
+  PC transition, decoded instruction, optional successful data access, and
+  optional resolved control-flow outcome
 - loading from either an in-memory byte span or an ELF file path
 - explicit parsing of fixed-address, 32-bit, little-endian RISC-V executables
 - complete prevalidation of ELF and program headers before architectural state
@@ -91,7 +94,8 @@ milestones are complete:
   environment-call transitions, session limits, breakpoints, syscall routing,
   invalid guest output ranges, partial writes, sink failures, exit statuses,
   stack placement and nonmutation, command-line parsing, hosted ELF execution,
-  ACT runner pass/fail and infrastructure classifications
+  execution-observation timing and classification, ACT runner pass/fail and
+  infrastructure classifications
 - optional AddressSanitizer and UndefinedBehaviorSanitizer instrumentation
 - GitHub Actions validation with GCC and Clang
 
@@ -155,7 +159,9 @@ command-line executable:
 - `ExecutionEngine` references a `CpuState` and `Memory`. `step()` fetches,
   decodes, and executes one instruction. `run(limit)` executes until its strict
   instruction limit or the first trap. Both APIs return variants, so successful
-  execution cannot be confused with a trap.
+  execution cannot be confused with a trap. An optional `ExecutionObserver`
+  receives one read-only `ExecutionObservation` after each successful
+  architectural commit.
 - `ProgramSession` owns no architectural state. It wraps an `ExecutionEngine`,
   dispatches precise user environment-call traps to an injected handler,
   applies the handler's explicit resume/exit decision, and supports host-side
@@ -245,6 +251,34 @@ independent of the host compiler's signed-shift and overflow choices.
 Keeping CPU state, memory, decoding, execution, program hosting, and ELF loading
 independently testable gives later syscall, debugging, and performance features
 clear integration points.
+
+## Execution observations
+
+`ExecutionObservation` is the shared, read-only boundary between architectural
+execution and future performance models. `StepCompleted` is an alias for this
+same record, so direct `step()` callers and injected observers see identical
+facts:
+
+- the completed instruction's original PC, raw and decoded instruction, and
+  resolved next PC
+- an optional successful load/store address, direction, and width in bytes
+- an optional control-flow classification—conditional branch, direct jump, or
+  indirect jump—and whether it was taken
+
+Every observation implies one successful aligned four-byte instruction fetch at
+its `program_counter`; the raw instruction is present in the decoded record.
+RV32IM performs at most one data access per instruction, so the data observation
+is optional rather than a list. For control flow, `next_program_counter` is the
+actual resolved successor: it is the fallthrough PC for an untaken branch and
+the selected target for a taken branch or jump.
+
+The callback runs only after register, memory, and PC effects have committed.
+Faulting, illegal, `ECALL`, and `EBREAK` instructions emit no completed
+observation. A `ProgramSession` forwards its observer to the execution engine,
+but a host-resumed or terminating environment call remains a separately counted
+session transition rather than an architecturally retired instruction. The
+observer receives only the immutable event, not mutable CPU or memory access,
+and its lifetime must cover the engine or session using it.
 
 ## ELF loading
 
@@ -420,6 +454,7 @@ The public headers can be used from another CMake target after linking
 #include <rvemu/cpu_state.hpp>
 #include <rvemu/elf_loader.hpp>
 #include <rvemu/execution_engine.hpp>
+#include <rvemu/execution_observation.hpp>
 #include <rvemu/linux_syscalls.hpp>
 #include <rvemu/memory.hpp>
 #include <rvemu/program_session.hpp>
@@ -438,6 +473,9 @@ const rvemu::StepResult result = engine.step();
 Callers can inspect `StepResult` as either `StepCompleted` or `Trap`. A bounded
 `run(instruction_limit)` call returns either `InstructionLimitReached` or
 `RunTrapped` and reports the number of successfully retired instructions.
+Passing an `ExecutionObserver` pointer to the engine or `ProgramSession`
+receives the same completed-instruction records during both stepping and
+bounded runs.
 
 Load a statically linked ELF file before constructing the execution engine:
 
@@ -475,8 +513,9 @@ does not reset registers or clear unrelated memory.
    by spurious RVC flags and CSR-based ACT failure diagnostics.
 8. **Complete:** add an initial interactive debugger with breakpoints,
    single-stepping, register display, and checked memory inspection.
-9. Define the shared execution-observation contract, then add configurable
-   cache and branch-prediction models.
+9. **In progress:** the shared completed-instruction observation contract is
+   complete; next add configurable cache and branch-prediction consumers
+   without changing architectural execution.
 10. Add reproducible workloads and report only measured benchmark results.
 11. Expand differential validation against Sail, QEMU, or Spike where each is
     practical.
@@ -515,6 +554,9 @@ does not reset registers or clear unrelated memory.
   to `-EIO` because `SIGPIPE` and richer host error translation are absent.
 - The debugger has no symbols, source mapping, disassembly command, watchpoints,
   register/memory mutation, reverse execution, or remote GDB protocol yet.
+- Execution observations cover successfully retired instructions only. Traps
+  and host-handled environment calls retain their existing separate result and
+  accounting paths.
 - ACT generated all 47 selected non-privileged RV32I/M ELFs, but the audit
   correctly blocks execution because every file is RVC-flagged and contains
   three CSR reads in its failure path. No architectural conformance result is

@@ -28,6 +28,7 @@ add_executable(rvemu_tests
   debugger_test.cpp
   elf_loader_test.cpp
   execution_engine_test.cpp
+  execution_observation_test.cpp
   immediate_instructions_test.cpp
   instruction_test.cpp
   linux_syscalls_test.cpp

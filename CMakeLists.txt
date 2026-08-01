@@ -34,6 +34,42 @@ target_include_directories(rvemu_core
 target_link_libraries(rvemu_core PRIVATE rvemu_project_options)
 
 option(
+  RVEMU_BUILD_WEB
+  "Build the browser WebAssembly dashboard module"
+  OFF
+)
+
+if(RVEMU_BUILD_WEB)
+  if(NOT EMSCRIPTEN)
+    message(FATAL_ERROR "RVEMU_BUILD_WEB requires the Emscripten toolchain")
+  endif()
+
+  add_executable(rvemu_web web/rvemu_web.cpp)
+  target_include_directories(rvemu_web PRIVATE web)
+  target_link_libraries(rvemu_web PRIVATE rvemu::core rvemu_project_options)
+  set_target_properties(
+    rvemu_web
+    PROPERTIES
+      OUTPUT_NAME rvemu
+      SUFFIX ".js"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/web"
+  )
+  target_link_options(
+    rvemu_web
+    PRIVATE
+      "--no-entry"
+      "-sALLOW_MEMORY_GROWTH=1"
+      "-sENVIRONMENT=web"
+      "-sEXPORT_ES6=1"
+      "-sEXPORT_KEEPALIVE=1"
+      "-sFILESYSTEM=0"
+      "-sMODULARIZE=1"
+      "-sEXPORT_NAME=createRvemuModule"
+      "-sEXPORTED_RUNTIME_METHODS=['UTF8ToString','HEAPU8']"
+  )
+endif()
+
+option(
   RVEMU_BUILD_CLI
   "Build the rvemu command-line frontend"
   ON

@@ -9,9 +9,10 @@ emulators.
 The project is being built in small, tested milestones. It now has a working
 fetch-decode-execute pipeline with complete RV32IM instruction support, a
 validated loader for static 32-bit RISC-V ELF executables, and a runnable
-`rvemu` command-line frontend with an interactive debugger. A host-side program
-session and a small Linux-style syscall environment provide program output and
-termination without changing architectural instruction behavior.
+`rvemu` command-line frontend with an interactive debugger, plus a browser
+dashboard backed by the same C++ core compiled to WebAssembly. A host-side
+program session and a small Linux-style syscall environment provide program
+output and termination without changing architectural instruction behavior.
 
 ## Current status
 
@@ -94,6 +95,10 @@ milestones are complete:
   status propagation, and precise loader, stack, limit, and trap diagnostics
 - an interactive debugger with cumulative bounded execution, software-free
   breakpoints, single stepping, and checked register and memory inspection
+- a thin WebAssembly bridge and responsive browser dashboard with real ELF
+  loading, stepping, batched run/pause, reset, host breakpoints, changed-register
+  highlighting, memory inspection, guest stdout/stderr, precise traps, loader
+  metadata, and cache/predictor/cycle-model reporting
 - a typed `rvemu-act-smoke` runner for already-generated, self-checking ACT 4
   RV32I/M ELF files
 - pinned ACT 4 inputs, a non-privileged halt ABI, linker script, generation-time
@@ -117,9 +122,9 @@ milestones are complete:
   and a separately scheduled/manual pinned ACT smoke workflow
 
 RV32IM execution, static ELF32 loading, the shared program session, minimal
-output/termination syscalls, freestanding stack setup, and the command-line
-runner are complete. There is currently no full process-startup stack,
-CLI performance report, or published cross-machine performance claim.
+output/termination syscalls, freestanding stack setup, command-line runner, and
+browser dashboard are complete. There is currently no full process-startup
+stack, CLI performance report, or published cross-machine performance claim.
 
 The pinned ACT 4 environment now generates and strictly audits all 47 selected
 non-privileged RV32I/M ELFs, and the ten representative smoke files pass on
@@ -211,6 +216,10 @@ command-line executable:
 - `BenchmarkWorkload` owns a resettable CPU, memory, and analyzer for one fixed
   synthetic workload. The optional `rvemu_benchmarks` executable times only
   bounded execution and reports host measurements separately from model data.
+- The browser bridge owns the same `CpuState`, `Memory`, `ProgramSession`,
+  `LinuxSyscallEnvironment`, and `PerformanceAnalyzer` types behind a small JSON
+  C API. Emscripten compiles that adapter and `rvemu_core` to WebAssembly; the
+  TypeScript interface only schedules batches and renders returned snapshots.
 
 Execution computes pending effects before committing them. A misaligned taken
 jump or branch therefore traps at the control-transfer instruction without
@@ -498,6 +507,44 @@ The implementation follows the
 [RISC-V ELF psABI](https://riscv-non-isa.github.io/riscv-elf-psabi-doc/#elf-object-files)
 specifications.
 
+## Browser dashboard
+
+The dashboard under `frontend/` runs the real C++ emulator in the browser. It
+starts with a small self-contained RV32IM ELF that prints through the hosted
+`write` syscall, performs repeated loads/stores and patterned branches, and
+exits normally. A user may replace it with another compatible static ELF using
+the loader control.
+
+The browser adapter under `web/` does not implement instruction behavior. It
+constructs the existing core/session/model objects, translates their typed
+results into JSON snapshots, and exposes memory reads plus host-breakpoint
+management. Run/pause remains responsive by executing bounded batches between
+animation frames; a direct step intentionally advances through a host
+breakpoint just like the command-line debugger.
+
+To run the checked-in browser build locally:
+
+```sh
+cd frontend
+npm install
+npm run dev
+```
+
+Rebuild the demo ELF and WebAssembly artifacts after changing the fixture,
+bridge, or core:
+
+```sh
+cd frontend
+npm run build:demo
+npm run build:wasm
+npm test
+```
+
+The WebAssembly target uses the documented performance configuration: split
+4 KiB, 64-byte-line, two-way caches; a 256-entry two-bit bimodal predictor
+initially weakly not taken; and cycle costs 1/10/20/5. Dashboard cycles and CPI
+are configured model outputs, not measured browser performance.
+
 ## Command-line execution
 
 A normal build creates `build/rvemu`. It accepts one static RV32IM ELF file and
@@ -593,10 +640,12 @@ pins, audit evidence, and the exact test boundary.
 ├── benchmarks/               # Fixed workloads and optional benchmark harness
 ├── cmake/                    # Shared compiler and sanitizer options
 ├── conformance/act4/         # Pinned ACT 4 smoke inputs and limitations
+├── frontend/                 # Browser dashboard, demo ELF, and Wasm artifacts
 ├── include/rvemu/            # Public C++ interfaces
 ├── src/                      # Core implementation
 ├── tests/                    # GoogleTest unit tests
 ├── tools/                    # ACT smoke support and executable
+├── web/                      # Thin C++ browser/WebAssembly adapter
 ├── AGENTS.md                 # Context for future coding-agent sessions
 └── CMakeLists.txt            # Top-level build definition
 ```
@@ -606,6 +655,8 @@ pins, audit evidence, and the exact test boundary.
 - CMake 3.20 or newer
 - a C++20 compiler (recent GCC, Clang, or MSVC)
 - Git and network access during the first test-enabled configuration
+- Node.js 22.13 or newer for the browser dashboard
+- Emscripten when rebuilding the checked-in WebAssembly artifacts
 
 GoogleTest 1.15.2 is fetched and built by default for reproducibility. An
 ABI-compatible installed package can be selected explicitly with
@@ -645,6 +696,19 @@ build-act/rvemu-act-smoke path/to/self-checking-rv32im.elf
 
 Its process exit status is 0 for a passing self-check, 1 for a reported test
 failure, and 2 for runner/infrastructure failure.
+
+The browser interface has its own build, type, lint, rendered-shell, and asset
+checks:
+
+```sh
+cd frontend
+npm install
+npm run build:demo
+npm run build:wasm
+npx tsc --noEmit
+npm run lint
+npm test
+```
 
 ## Usage
 
@@ -719,7 +783,10 @@ does not reset registers or clear unrelated memory.
 10. **Complete:** three deterministic RV32IM workloads and a pinned Google
     Benchmark harness reporting measured host throughput, raw cache/predictor
     statistics, hit/accuracy rates, and configured cycle estimates.
-11. **Next:** expand differential validation against Sail, QEMU, or Spike and
+11. **Complete:** add a thin WebAssembly bridge and browser dashboard for ELF
+    loading, execution control, debugging, guest output, and performance-model
+    visualization without moving architectural policy out of the C++ core.
+12. **Next:** expand differential validation against Sail, QEMU, or Spike and
     expose optional performance-model reporting through the CLI.
 
 ## Current limitations
@@ -751,6 +818,10 @@ does not reset registers or clear unrelated memory.
 - The CLI accepts no guest arguments yet. Its default contiguous mapping is 16
   MiB at `0x80000000`; programs linked elsewhere must select matching memory
   options.
+- The browser dashboard intentionally fixes that same 16 MiB mapping at
+  `0x80000000` and a 1 MiB freestanding stack. It has no guest arguments,
+  symbols, source mapping, watchpoints, or persistent browser-side program
+  storage; uploaded ELF bytes remain local to the current page.
 - Hosted output supports only stdout and stderr. There is no guest stdin, file
   table, signal model, or broader Linux syscall emulation; all sink failures map
   to `-EIO` because `SIGPIPE` and richer host error translation are absent.

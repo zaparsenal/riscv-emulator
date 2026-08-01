@@ -45,6 +45,13 @@ add_executable(rvemu_tests
   rvemu_cli_test.cpp
   stack_test.cpp
   system_instructions_test.cpp
+  web_bridge_test.cpp
+  ../web/rvemu_web.cpp
+)
+target_include_directories(rvemu_tests PRIVATE ${PROJECT_SOURCE_DIR}/web)
+target_compile_definitions(
+  rvemu_tests
+  PRIVATE RVEMU_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
 )
 target_link_libraries(
   rvemu_tests

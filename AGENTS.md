@@ -16,7 +16,8 @@ Correctness takes priority over optimization.
 Milestones 1 through 6 are complete, including the full RV32IM instruction set,
 static ELF32 loading, hosted syscalls, freestanding stack setup, and a runnable
 command-line frontend. The first interactive-debugger milestone is also
-complete. The repository has:
+complete, as is the thin WebAssembly/browser dashboard milestone. The
+repository has:
 
 - C++20/CMake project scaffolding
 - a reusable `rvemu::core` library
@@ -99,6 +100,13 @@ complete. The repository has:
 - `InteractiveDebugger` with a strict cumulative step budget, host breakpoints,
   single stepping, register display, checked byte-memory display, and scripted
   stream injection for deterministic tests
+- a `web/` JSON C API that owns the existing core/session/performance types,
+  compiles with Emscripten, and exposes ELF load/reset/step/batched-run,
+  breakpoint, snapshot, and checked-memory-read operations
+- a responsive `frontend/` dashboard with a bundled RV32IM demo ELF, uploaded
+  ELF loading, current instruction/PC, changed-register highlighting, memory,
+  run/pause/step/reset, breakpoints, stdout/stderr, precise trap/loader details,
+  and cache/predictor/cycle-model visualization
 - `rvemu-act-smoke` support that classifies self-checking ELF pass/fail outcomes
   separately from loader, trap, unknown-call, breakpoint, and limit failures
 - an immutable official ACT image pin, observed tool versions, I/M-oriented UDB
@@ -122,9 +130,9 @@ complete. The repository has:
 
 RV32IM, the static ELF loader, shared program-session contract, minimal
 output/termination syscalls, freestanding stack initializer, and command-line
-runner are complete. There is no full process-startup image, interactive
-debugger beyond the initial command set, CLI performance report, or published
-cross-machine benchmark baseline.
+runner and browser dashboard are complete. There is no full process-startup
+image, interactive debugger beyond the initial command set, CLI performance
+report, or published cross-machine benchmark baseline.
 
 The ACT 4 harness generated and compatibility-audited all 47 selected
 non-privileged RV32I/M ELFs from Sail results. On 2026-07-23 the ten-file
@@ -158,6 +166,9 @@ benchmarks/rvemu_benchmarks.cpp Google Benchmark timing and metric reporting
 tools/act_smoke.hpp         Typed self-checking ELF smoke-runner API
 tools/act_smoke.cpp         ACT load, execution, and result classification
 tools/act_smoke_main.cpp    `rvemu-act-smoke` reporting executable
+web/rvemu_web_api.hpp       Browser-facing C API exported to WebAssembly
+web/rvemu_web.cpp           Thin core/session/model owner and JSON snapshots
+frontend/                   Browser dashboard, demo ELF, and Wasm artifacts
 conformance/act4/           Pinned ACT inputs, overlay, audit, and manifest
 src/cpu_state.cpp            CPU-state implementation
 src/branch_predictor.cpp     Static and two-bit observation consumers
@@ -391,6 +402,25 @@ only when `RVEMU_BUILD_BENCHMARKS=ON`.
   `192ef10025eb2c4cdd392bc502f0c852196baa48`. Standard builds must not download
   it; fetch it only when `RVEMU_BUILD_BENCHMARKS=ON`, or honor the explicit
   system-package opt-in.
+- The browser adapter is a host-policy and serialization layer only. Keep ELF
+  validation, stack placement, instruction execution, syscalls, traps, cache
+  state, branch prediction, and cycle estimation in their existing C++ types;
+  never reimplement architectural behavior in TypeScript.
+- `RVEMU_BUILD_WEB=ON` requires Emscripten and builds the `rvemu.js`/`rvemu.wasm`
+  module. Ordinary C++ builds remain unchanged, and ordinary hosted frontend
+  builds consume the checked-in Wasm artifacts without requiring Emscripten.
+- Browser execution uses bounded batches between animation frames so pause
+  remains responsive. Check host breakpoints before each guest step; direct
+  `step()` must continue to bypass them. Stop a batch immediately on exit,
+  trap, or a breakpoint.
+- The browser mapping is fixed at `0x80000000` with 16 MiB of memory and a 1 MiB
+  freestanding stack. Loading a new image clears breakpoints; reset reloads the
+  same bytes and preserves breakpoints. ELF-load failures must leave the active
+  machine untouched.
+- Browser performance reporting uses the benchmark contract's 4096-byte,
+  64-byte-line, two-way split caches, 256-entry weakly-not-taken bimodal
+  predictor, and 1/10/20/5 cost inputs. Label cycles and CPI as configured model
+  outputs, never measured browser speed.
 - `ProgramSession` is a host-policy layer above `ExecutionEngine`; do not move
   syscall behavior into instruction execution. Normal instructions and
   non-`ECALL` traps must preserve the existing engine semantics.
